@@ -36,8 +36,14 @@ export default function DashboardPage() {
     } catch (e: any) {
       if (e.response?.status === 429) {
         setError(e.response.data?.error?.message || "Daily limit reached. Upgrade your plan.");
+      } else if (e.code === 'ECONNABORTED') {
+        setError("Request timed out. Please try again.");
+      } else if (e.response?.status === 401) {
+        setError("Session expired. Please log in again.");
+        router.push('/login');
+        return;
       } else {
-        setError("Failed to create project");
+        setError(e.response?.data?.error?.message || "Failed to create project. Please try again.");
       }
     } finally {
       setLoading(false);
