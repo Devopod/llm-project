@@ -69,11 +69,34 @@ export default function ProjectPage() {
       if (msg.type === "success" || msg.type === "code") {
         loadFiles();
       }
+      if (msg.type === "deployment") {
+        projectsApi.get(id).then((res) => setProject(res.data)).catch(() => {});
+      }
     });
+
+    // Poll for project status when deploying
+    const pollInterval = setInterval(() => {
+      projectsApi.get(id).then((res) => {
+        setProject((prev: any) => {
+          if (prev?.status === 'deploying' && res.data.status !== 'deploying') {
+            projectsApi.messages(id).then((r) => {
+              const msgs = r.data.map((m: Record<string, unknown>) => ({
+                type: m.message_type as string,
+                content: m.content as string,
+                agent: m.role as string,
+                timestamp: m.created_at as string,
+              }));
+              setMessages(msgs);
+            }).catch(() => {});
+          }
+          return res.data;
+        });
+      }).catch(() => {});
+    }, 5000);
     ws.connect();
     wsRef.current = ws;
 
-    return () => { ws.disconnect(); };
+    return () => { ws.disconnect(); clearInterval(pollInterval); };
   }, [id, router]);
 
   useEffect(() => {
@@ -214,6 +237,12 @@ export default function ProjectPage() {
             (project as Record<string, string>).status === "executing" ? "border-blue-700 text-blue-400" :
             "border-gray-700 text-gray-400"
           }`}>{(project as Record<string, string>).status}</span>
+          {(project as any).deployment_url && (
+            <a href={(project as any).deployment_url} target="_blank" rel="noopener noreferrer"
+              className="text-xs px-2 py-0.5 rounded-full bg-green-900/50 border border-green-700 text-green-400 hover:bg-green-800/50 transition">
+              Live: {(project as any).deployment_url}
+            </a>
+          )}
         </div>
         <div className="flex gap-2">
           <button onClick={() => handleDeploy('approve')} className="px-3 py-1.5 text-sm bg-purple-700 hover:bg-purple-600 rounded-lg transition">
@@ -281,6 +310,15 @@ export default function ProjectPage() {
                       <pre className="bg-gray-900 border border-gray-700 rounded-md p-3 overflow-x-auto">
                         <code className="text-xs text-green-300 font-mono whitespace-pre-wrap">{msg.content}</code>
                       </pre>
+                    ) : msg.type === "deployment" ? (
+                      <div className="text-sm text-gray-300 whitespace-pre-wrap">
+                        {msg.content.split(/(https?:\/\/[^\s]+)/g).map((part: string, idx: number) =>
+                          part.match(/^https?:\/\//) ? (
+                            <a key={idx} href={part} target="_blank" rel="noopener noreferrer"
+                              className="text-green-400 underline hover:text-green-300 font-medium">{part}</a>
+                          ) : <span key={idx}>{part}</span>
+                        )}
+                      </div>
                     ) : (
                       <p className="text-sm text-gray-300 whitespace-pre-wrap">{msg.content}</p>
                     )}

@@ -32,38 +32,191 @@ def run_agent_pipeline(self, project_id: str, prompt: str):
 
 @shared_task(bind=True, max_retries=1)
 def deploy_project_task(self, project_id: str):
+    """Deploy project files via a local server + ngrok tunnel."""
+    import subprocess
+    import signal
+    import time
+    import socket
+
+    def _find_free_port():
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('', 0))
+            return s.getsockname()[1]
+
     try:
         project = Project.objects.get(id=project_id)
-        from .deployer import DeployerAgent
-        deployer = DeployerAgent(project)
+        from astradev.projects.models import Message
 
-        # Generate a deployment URL (simulated ngrok-style)
-        deploy_id = str(uuid.uuid4())[:8]
-        host = os.getenv('DEPLOY_HOST', 'localhost')
-        port = 8080 + (hash(project_id) % 100)
-        deploy_url = f"https://{deploy_id}.ngrok-free.dev"
+        workspace = project.project_state.get('workspace_path', '')
+        if not workspace or not os.path.isdir(workspace):
+            workspace = f"/tmp/astradev_workspaces/{project_id}"
 
+        if not os.path.isdir(workspace):
+            project.status = 'failed'
+            project.save(update_fields=['status'])
+            Message.objects.create(
+                project=project, role='deployer',
+                content="Deployment failed: No workspace files found.",
+                message_type='error',
+            )
+            return {'status': 'error', 'message': 'No workspace'}
+
+        # Detect project type and choose server
+        files = os.listdir(workspace)
+        port = _find_free_port()
+        server_process = None
+        start_cmd = None
+
+        # Check for web-servable content
+        has_index_html = 'index.html' in files
+        has_package_json = 'package.json' in files
+        has_flask = any(
+            'flask' in open(os.path.join(workspace, f)).read().lower()
+            for f in files if f.endswith('.py')
+            and os.path.isfile(os.path.join(workspace, f))
+        )
+        has_fastapi = any(
+            'fastapi' in open(os.path.join(workspace, f)).read().lower()
+            for f in files if f.endswith('.py')
+            and os.path.isfile(os.path.join(workspace, f))
+        )
+        has_django = 'manage.py' in files
+
+        # Determine start command
+        if has_index_html:
+            start_cmd = ['python3', '-m', 'http.server', str(port)]
+        elif has_fastapi:
+            # Find the main app file
+            app_file = None
+            for f in files:
+                if f.endswith('.py') and os.path.isfile(os.path.join(workspace, f)):
+                    content = open(os.path.join(workspace, f)).read()
+                    if 'FastAPI' in content or 'fastapi' in content:
+                        app_file = f
+                        break
+            if app_file:
+                module = app_file.replace('.py', '')
+                start_cmd = ['uvicorn', f'{module}:app', '--host', '0.0.0.0', '--port', str(port)]
+            else:
+                start_cmd = ['python3', '-m', 'http.server', str(port)]
+        elif has_flask:
+            app_file = None
+            for f in files:
+                if f.endswith('.py') and os.path.isfile(os.path.join(workspace, f)):
+                    content = open(os.path.join(workspace, f)).read()
+                    if 'Flask' in content:
+                        app_file = f
+                        break
+            if app_file:
+                start_cmd = ['python3', app_file]
+                os.environ['FLASK_RUN_PORT'] = str(port)
+            else:
+                start_cmd = ['python3', '-m', 'http.server', str(port)]
+        elif has_django:
+            start_cmd = ['python3', 'manage.py', 'runserver', f'0.0.0.0:{port}']
+        elif has_package_json:
+            # Install deps and start node app
+            subprocess.run(['npm', 'install'], cwd=workspace, capture_output=True, timeout=60)
+            start_cmd = ['npx', 'serve', '-l', str(port), '-s', '.']
+        else:
+            # Default: create a simple index.html from project files and serve
+            index_path = os.path.join(workspace, 'index.html')
+            if not os.path.exists(index_path):
+                # Generate simple HTML showcase
+                file_list = '\n'.join(f'<li>{f}</li>' for f in files)
+                html = f"""<!DOCTYPE html>
+<html>
+<head><title>{project.name} - Deployed by AstraDev</title>
+<style>body{{font-family:system-ui;max-width:800px;margin:50px auto;padding:20px;background:#0d1117;color:#c9d1d9}}
+h1{{color:#58a6ff}}pre{{background:#161b22;padding:15px;border-radius:8px;overflow-x:auto}}
+a{{color:#58a6ff}}li{{margin:5px 0}}</style></head>
+<body>
+<h1>{project.name}</h1>
+<p>Deployed via AstraDev</p>
+<h2>Project Files</h2>
+<ul>{file_list}</ul>
+<h2>Source Code</h2>
+"""
+                # Include first few source files
+                for f in files[:5]:
+                    fpath = os.path.join(workspace, f)
+                    if os.path.isfile(fpath) and not f.startswith('.'):
+                        try:
+                            code = open(fpath).read()[:3000]
+                            html += f'<h3>{f}</h3><pre><code>{code}</code></pre>\n'
+                        except Exception:
+                            pass
+                html += "</body></html>"
+                with open(index_path, 'w') as fh:
+                    fh.write(html)
+            start_cmd = ['python3', '-m', 'http.server', str(port)]
+
+        # Start the server process
+        logger.info(f"Starting server for project {project_id}: {start_cmd}")
+        server_process = subprocess.Popen(
+            start_cmd, cwd=workspace,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            preexec_fn=os.setsid,
+        )
+
+        # Wait for server to start
+        time.sleep(2)
+        if server_process.poll() is not None:
+            stderr = server_process.stderr.read().decode()[:500]
+            raise RuntimeError(f"Server failed to start: {stderr}")
+
+        # Create ngrok tunnel
+        from pyngrok import ngrok, conf
+        ngrok_token = os.getenv('NGROK_AUTHTOKEN', '3FlGOVKrwWRomRSRgEJZ4F9vbkG_34VFdCBwDVkrg1WUVRjQR')
+        conf.get_default().auth_token = ngrok_token
+
+        # Disconnect any existing tunnels to free up the slot (free tier = 1 tunnel)
+        try:
+            existing = ngrok.get_tunnels()
+            for t in existing:
+                ngrok.disconnect(t.public_url)
+        except Exception:
+            pass
+
+        tunnel = ngrok.connect(port, 'http')
+        deploy_url = tunnel.public_url
+        if deploy_url.startswith('http://'):
+            deploy_url = deploy_url.replace('http://', 'https://')
+
+        # Save deployment info
         project.deployment_url = deploy_url
         project.status = 'completed'
-        project.save(update_fields=['deployment_url', 'status'])
+        deploy_info = project.project_state.get('deploy_info', {})
+        deploy_info.update({
+            'port': port,
+            'pid': server_process.pid,
+            'tunnel_url': deploy_url,
+            'start_cmd': start_cmd,
+        })
+        project.project_state['deploy_info'] = deploy_info
+        project.save(update_fields=['deployment_url', 'status', 'project_state'])
 
-        # Send deployment message
-        from astradev.projects.models import Message
         Message.objects.create(
-            project=project,
-            role='deployer',
+            project=project, role='deployer',
             content=f"Deployment successful! Your app is live at: {deploy_url}",
             message_type='deployment',
-            metadata={'url': deploy_url, 'status': 'live'},
+            metadata={'url': deploy_url, 'status': 'live', 'port': port},
         )
-        logger.info(f"Project {project_id} deployed to {deploy_url}")
+        logger.info(f"Project {project_id} deployed to {deploy_url} (port {port})")
         return {'status': 'deployed', 'url': deploy_url}
+
     except Exception as e:
         logger.error(f"Deploy error: {e}")
         try:
             project = Project.objects.get(id=project_id)
             project.status = 'failed'
             project.save(update_fields=['status'])
+            from astradev.projects.models import Message
+            Message.objects.create(
+                project=project, role='deployer',
+                content=f"Deployment failed: {str(e)[:200]}",
+                message_type='error',
+            )
         except Exception:
             pass
         raise
