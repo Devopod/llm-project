@@ -1,10 +1,8 @@
 "use client";
-import { useEffect, useState, useRef, use } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState, useRef } from "react";
+import { useRouter, useParams } from "next/navigation";
 import { projects as projectsApi, workspaces } from "@/lib/api";
 import { ProjectWebSocket } from "@/lib/websocket";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 interface Message {
   type: string;
@@ -29,8 +27,8 @@ interface FileEntry {
   size: number;
 }
 
-export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function ProjectPage() {
+  const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [project, setProject] = useState<Record<string, unknown> | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -259,10 +257,9 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
                       {msg.timestamp && <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>}
                     </div>
                     {msg.type === "code" ? (
-                      <SyntaxHighlighter language="typescript" style={vscDarkPlus}
-                        customStyle={{ fontSize: "12px", margin: 0, borderRadius: "6px" }}>
-                        {msg.content}
-                      </SyntaxHighlighter>
+                      <pre className="bg-gray-900 border border-gray-700 rounded-md p-3 overflow-x-auto">
+                        <code className="text-xs text-green-300 font-mono whitespace-pre-wrap">{msg.content}</code>
+                      </pre>
                     ) : (
                       <p className="text-sm text-gray-300 whitespace-pre-wrap">{msg.content}</p>
                     )}
@@ -280,10 +277,9 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
                       <span className="text-sm text-gray-400">{selectedFile}</span>
                       <button onClick={() => setSelectedFile(null)} className="text-xs text-gray-500 hover:text-white">Close</button>
                     </div>
-                    <SyntaxHighlighter language="typescript" style={vscDarkPlus}
-                      customStyle={{ fontSize: "12px", borderRadius: "8px" }} showLineNumbers>
-                      {fileContent}
-                    </SyntaxHighlighter>
+                    <pre className="bg-gray-900 border border-gray-700 rounded-lg p-4 overflow-x-auto">
+                      <code className="text-xs text-gray-200 font-mono whitespace-pre-wrap">{fileContent}</code>
+                    </pre>
                   </div>
                 ) : (
                   <p className="text-gray-500">Select a file from the sidebar to view</p>

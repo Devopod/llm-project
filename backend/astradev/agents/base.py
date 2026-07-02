@@ -67,11 +67,11 @@ class BaseAgent:
             return result
 
     def build_messages(self, task: str, extra_context: str = '') -> list:
-        messages = [{'role': 'system', 'content': self.system_prompt[:3000]}]
+        messages = [{'role': 'system', 'content': self.system_prompt[:800]}]
         if extra_context:
-            messages.append({'role': 'user', 'content': f"Context:\n{extra_context[:2000]}"})
-            messages.append({'role': 'assistant', 'content': 'Understood. I have the context.'})
-        messages.append({'role': 'user', 'content': task[:2000]})
+            messages.append({'role': 'user', 'content': f"Context:\n{extra_context[:600]}"})
+            messages.append({'role': 'assistant', 'content': 'Understood.'})
+        messages.append({'role': 'user', 'content': task[:800]})
         return messages
 
     def log_token_usage(self, tokens_input, tokens_output, key_used):
