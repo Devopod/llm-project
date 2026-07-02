@@ -13,6 +13,8 @@ def health_check(request):
     return Response({'status': 'ok', 'service': 'AstraDev API', 'version': '1.0.0'})
 
 
+from astradev.projects.deploy_proxy import DeployProxyView
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/health/', health_check, name='health-check'),
@@ -20,6 +22,8 @@ urlpatterns = [
     path('api/projects/', include('astradev.projects.urls')),
     path('api/uploads/', include('astradev.uploads.urls')),
     path('api/workspaces/', include('astradev.workspaces.urls')),
+    path('projects/<uuid:project_id>/deployed/', DeployProxyView.as_view(), name='deploy-proxy-root'),
+    path('projects/<uuid:project_id>/deployed/<path:path>', DeployProxyView.as_view(), name='deploy-proxy'),
 ]
 
 if settings.DEBUG:

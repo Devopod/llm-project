@@ -165,23 +165,8 @@ a{{color:#58a6ff}}li{{margin:5px 0}}</style></head>
             stderr = server_process.stderr.read().decode()[:500]
             raise RuntimeError(f"Server failed to start: {stderr}")
 
-        # Create ngrok tunnel
-        from pyngrok import ngrok, conf
-        ngrok_token = os.getenv('NGROK_AUTHTOKEN', '3FlGOVKrwWRomRSRgEJZ4F9vbkG_34VFdCBwDVkrg1WUVRjQR')
-        conf.get_default().auth_token = ngrok_token
-
-        # Disconnect any existing tunnels to free up the slot (free tier = 1 tunnel)
-        try:
-            existing = ngrok.get_tunnels()
-            for t in existing:
-                ngrok.disconnect(t.public_url)
-        except Exception:
-            pass
-
-        tunnel = ngrok.connect(port, 'http')
-        deploy_url = tunnel.public_url
-        if deploy_url.startswith('http://'):
-            deploy_url = deploy_url.replace('http://', 'https://')
+        # Deploy URL is a path on the same base URL (proxied by Django)
+        deploy_url = f"/projects/{project_id}/deployed/"
 
         # Save deployment info
         project.deployment_url = deploy_url
@@ -190,7 +175,7 @@ a{{color:#58a6ff}}li{{margin:5px 0}}</style></head>
         deploy_info.update({
             'port': port,
             'pid': server_process.pid,
-            'tunnel_url': deploy_url,
+            'deploy_path': deploy_url,
             'start_cmd': start_cmd,
         })
         project.project_state['deploy_info'] = deploy_info
@@ -202,7 +187,7 @@ a{{color:#58a6ff}}li{{margin:5px 0}}</style></head>
             message_type='deployment',
             metadata={'url': deploy_url, 'status': 'live', 'port': port},
         )
-        logger.info(f"Project {project_id} deployed to {deploy_url} (port {port})")
+        logger.info(f"Project {project_id} deployed at {deploy_url} (port {port})")
         return {'status': 'deployed', 'url': deploy_url}
 
     except Exception as e:

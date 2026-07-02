@@ -6,6 +6,18 @@ const nextConfig = {
     return {
       beforeFiles: [
         {
+          source: '/projects/:id/deployed',
+          destination: 'http://localhost:8000/projects/:id/deployed/',
+        },
+        {
+          source: '/projects/:id/deployed/',
+          destination: 'http://localhost:8000/projects/:id/deployed/',
+        },
+        {
+          source: '/projects/:id/deployed/:path*',
+          destination: 'http://localhost:8000/projects/:id/deployed/:path*',
+        },
+        {
           source: '/api/:path*/',
           destination: 'http://localhost:8000/api/:path*/',
         },

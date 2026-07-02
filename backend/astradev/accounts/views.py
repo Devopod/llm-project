@@ -17,6 +17,14 @@ def signup(request):
     user = serializer.create(serializer.validated_data)
     user.is_verified = True
     user.save()
+
+    # Create sample projects for new user
+    try:
+        from astradev.projects.sample_projects import create_sample_projects
+        create_sample_projects(user)
+    except Exception:
+        pass  # Don't block signup if sample creation fails
+
     return Response({
         'user': UserProfileSerializer(user).data,
         'access_token': generate_access_token(user),
