@@ -132,6 +132,24 @@ export default function ProjectPage() {
     }
   };
 
+  const handleDeploy = async (action: 'approve' | 'deny') => {
+    if (action === 'approve' && !confirm("Deploy this project? The app will be deployed to a public URL.")) return;
+    try {
+      const res = await projectsApi.deploy(id, action);
+      setMessages((prev) => [...prev, {
+        type: "deployment",
+        content: res.data.message,
+        agent: "deployer",
+        timestamp: new Date().toISOString(),
+      }]);
+      if (action === 'approve') {
+        setProject((prev: any) => prev ? { ...prev, status: 'deploying' } : prev);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const handleTerminal = async () => {
     if (!terminalInput.trim()) return;
     setTerminalOutput((prev) => prev + `$ ${terminalInput}\n`);
@@ -198,6 +216,9 @@ export default function ProjectPage() {
           }`}>{(project as Record<string, string>).status}</span>
         </div>
         <div className="flex gap-2">
+          <button onClick={() => handleDeploy('approve')} className="px-3 py-1.5 text-sm bg-purple-700 hover:bg-purple-600 rounded-lg transition">
+            Deploy
+          </button>
           <button onClick={handleBuildApk} className="px-3 py-1.5 text-sm bg-green-700 hover:bg-green-600 rounded-lg transition">
             Build APK
           </button>

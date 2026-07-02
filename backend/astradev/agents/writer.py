@@ -25,15 +25,18 @@ Output format (MUST be valid JSON):
   "next_steps": "What should be done next (optional)"
 }
 
-Rules:
-- Write complete, runnable code — no placeholders or TODOs
-- Include proper error handling
+STRICT RULES:
+- Write COMPLETE, FULL, RUNNABLE code — NEVER use placeholders like '...', '// rest of code', '# TODO', or 'pass'
+- Every file MUST be syntactically valid and immediately executable
+- Include ALL necessary imports at the top of each file
+- Include proper error handling and edge cases
 - Include type annotations where applicable
 - Follow language-specific best practices (PEP 8, ESLint, etc.)
-- Include all necessary imports
 - Use existing project patterns if context is provided
 - Output valid JSON only — no markdown, no code fences around the JSON itself
-- File paths should be relative to project root"""
+- File paths should be relative to project root
+- If a file is long, still include EVERY line — never abbreviate or skip sections
+- Code must pass syntax checking (python -c, node --check, tsc, etc.)"""
 
     def execute(self, task_description: str, context: dict = None) -> dict:
         self.emit('action', f'Writing code: {task_description[:100]}...')

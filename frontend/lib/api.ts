@@ -51,7 +51,15 @@ export const auth = {
     api.post('/auth/login/', data),
   logout: () => api.post('/auth/logout/'),
   profile: () => api.get('/auth/profile/'),
-  stats: () => api.get('/auth/stats/'),
+  updateProfile: (data: { display_name?: string; bio?: string }) =>
+    api.put('/auth/profile/', data),
+  changePassword: (data: { current_password: string; new_password: string }) =>
+    api.put('/auth/change-password/', data),
+  usage: () => api.get('/auth/usage/'),
+  plans: () => api.get('/auth/plans/'),
+  submitPayment: (data: { plan: string; transaction_id: string; sender_number: string }) =>
+    api.post('/auth/payments/submit/', data),
+  paymentHistory: () => api.get('/auth/payments/history/'),
 };
 
 export const projects = {
@@ -67,6 +75,8 @@ export const projects = {
   chat: (id: string, message: string) =>
     api.post(`/projects/${id}/chat/`, { message }),
   files: (id: string) => api.get(`/projects/${id}/files/`),
+  deploy: (id: string, action: 'approve' | 'deny') =>
+    api.post(`/projects/${id}/deploy/`, { action }),
 };
 
 export const workspaces = {
@@ -88,4 +98,15 @@ export const uploads = {
     });
   },
   status: (id: string) => api.get(`/uploads/${id}/`),
+};
+
+export const admin = {
+  login: (data: { username: string; password: string }) =>
+    api.post('/auth/admin/login/', data),
+  dashboard: () => api.get('/auth/admin/dashboard/'),
+  users: () => api.get('/auth/admin/users/'),
+  payments: () => api.get('/auth/admin/payments/'),
+  verifyPayment: (id: string, action: string, note?: string) =>
+    api.post(`/auth/admin/payments/${id}/verify/`, { action, note }),
+  deleteUser: (id: string) => api.delete(`/auth/admin/users/${id}/delete/`),
 };

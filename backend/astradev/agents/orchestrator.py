@@ -15,6 +15,12 @@ from .tester import TestingAgent
 from .debugger import DebugAgent
 from .deployer import DeploymentAgent
 from .documenter import DocumentationAgent
+from .terminal import TerminalAgent
+from .git_agent import GitAgent
+from .security import SecurityAgent
+from .browser_agent import BrowserAgent
+from .refactor import RefactorAgent
+from .memory import MemoryAgent
 
 logger = logging.getLogger('astradev.agents')
 
@@ -35,6 +41,12 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
         self.debugger = DebugAgent(project)
         self.deployer = DeploymentAgent(project)
         self.documenter = DocumentationAgent(project)
+        self.terminal = TerminalAgent(project)
+        self.git_agent = GitAgent(project)
+        self.security = SecurityAgent(project)
+        self.browser = BrowserAgent(project)
+        self.refactor = RefactorAgent(project)
+        self.memory = MemoryAgent(project)
         self.workspace_path = f"/tmp/astradev_workspaces/{project.id}"
 
     def execute(self, prompt: str, context: dict = None) -> dict:
@@ -179,6 +191,31 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
                 self._write_file(file_info['path'], file_info.get('content', ''))
             return result
 
+        elif task_type == 'terminal':
+            context['workspace_path'] = self.workspace_path
+            return self.terminal.execute(description, context)
+
+        elif task_type == 'git':
+            context['workspace_path'] = self.workspace_path
+            return self.git_agent.execute(description, context)
+
+        elif task_type == 'security':
+            context['workspace_path'] = self.workspace_path
+            code = self._read_workspace_files()
+            context['code'] = code
+            return self.security.execute(description, context)
+
+        elif task_type == 'browser':
+            return self.browser.execute(description, context)
+
+        elif task_type == 'refactor':
+            code = self._read_workspace_files()
+            context['code'] = code
+            result = self.refactor.execute(description, context)
+            for file_info in result.get('files', []):
+                self._write_file(file_info['path'], file_info.get('content', ''))
+            return result
+
         else:
             return self.writer.execute(description, context)
 
@@ -242,5 +279,10 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
             'debug': 'debugger',
             'deploy': 'deployer',
             'document': 'documenter',
+            'terminal': 'terminal',
+            'git': 'git',
+            'security': 'security',
+            'browser': 'browser',
+            'refactor': 'refactor',
         }
         return mapping.get(task_type, 'writer')

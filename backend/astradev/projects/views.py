@@ -16,6 +16,16 @@ def project_list(request):
         projects = Project.objects.filter(user=request.user)
         return Response(ProjectSerializer(projects, many=True).data)
 
+    # Check usage limits
+    user = request.user
+    if not user.can_send_message():
+        return Response({
+            'error': {
+                'code': 'LIMIT_REACHED',
+                'message': f'Daily message limit reached ({user.message_limit}). Upgrade your plan for more.',
+            }
+        }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
     serializer = ProjectCreateSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     project = Project.objects.create(
@@ -31,6 +41,11 @@ def project_list(request):
             content=prompt,
             message_type='message',
         )
+        # Track usage
+        user.messages_used_today += 1
+        user.total_messages_sent += 1
+        user.total_projects_created += 1
+        user.save(update_fields=['messages_used_today', 'total_messages_sent', 'total_projects_created'])
         # Trigger agent execution asynchronously
         from astradev.agents.tasks import run_agent_pipeline
         run_agent_pipeline.delay(str(project.id), prompt)
@@ -136,3 +151,31 @@ def project_files(request, project_id):
         return Response({'error': {'code': 'NOT_FOUND', 'message': 'Project not found'}},
                         status=status.HTTP_404_NOT_FOUND)
     return Response(project.project_state.get('file_tree', {}))
+
+
+@api_view(['POST'])
+def deploy_project(request, project_id):
+    try:
+        project = Project.objects.get(id=project_id, user=request.user)
+    except Project.DoesNotExist:
+        return Response({'error': {'code': 'NOT_FOUND', 'message': 'Project not found'}},
+                        status=status.HTTP_404_NOT_FOUND)
+
+    action = request.data.get('action')  # 'approve' or 'deny'
+    if action == 'approve':
+        project.status = 'deploying'
+        project.save()
+        # Trigger deployment
+        from astradev.agents.tasks import deploy_project_task
+        deploy_project_task.delay(str(project.id))
+        return Response({
+            'message': 'Deployment approved. Your app is being deployed...',
+            'status': 'deploying',
+        })
+    elif action == 'deny':
+        return Response({
+            'message': 'Deployment cancelled.',
+            'status': project.status,
+        })
+    else:
+        return Response({'error': 'Action must be approve or deny'}, status=400)

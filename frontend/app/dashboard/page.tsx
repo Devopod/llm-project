@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { projects as projectsApi } from "@/lib/api";
 import { useProjectStore } from "@/lib/store";
+import NavBar from "@/components/NavBar";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -12,6 +13,7 @@ export default function DashboardPage() {
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [buildApk, setBuildApk] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     const token = localStorage.getItem("access_token");
@@ -22,6 +24,7 @@ export default function DashboardPage() {
   const handleCreate = async () => {
     if (!name.trim()) return;
     setLoading(true);
+    setError("");
     let finalPrompt = prompt;
     if (buildApk) {
       finalPrompt += "\n\n[BUILD_APK] Generate an Android APK for this project. Create a complete Android app with Kotlin/Jetpack Compose, include build.gradle files, and compile into a downloadable APK.";
@@ -30,10 +33,25 @@ export default function DashboardPage() {
       const res = await projectsApi.create({ name, prompt: finalPrompt });
       setProjects([res.data, ...projects]);
       router.push(`/projects/${res.data.id}`);
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      if (e.response?.status === 429) {
+        setError(e.response.data?.error?.message || "Daily limit reached. Upgrade your plan.");
+      } else {
+        setError("Failed to create project");
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!confirm("Delete this project? This cannot be undone.")) return;
+    try {
+      await projectsApi.delete(id);
+      setProjects(projects.filter((p) => p.id !== id));
+    } catch {
+      alert("Failed to delete project");
     }
   };
 
@@ -48,15 +66,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-gray-950">
-      <nav className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg" />
-          <span className="text-xl font-bold">AstraDev</span>
-        </div>
-        <button onClick={() => { localStorage.clear(); router.push("/login"); }}
-          className="text-gray-400 hover:text-white text-sm">Logout</button>
-      </nav>
-
+      <NavBar />
       <main className="max-w-5xl mx-auto px-6 py-8">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-3xl font-bold">My Projects</h1>
@@ -69,6 +79,7 @@ export default function DashboardPage() {
         {showCreate && (
           <div className="mb-8 p-6 bg-gray-900 border border-gray-800 rounded-xl">
             <h2 className="text-xl font-semibold mb-4">Create New Project</h2>
+            {error && <p className="text-red-400 text-sm mb-3">{error}</p>}
             <div className="space-y-4">
               <input type="text" placeholder="Project name" value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -110,9 +121,17 @@ export default function DashboardPage() {
                     <h3 className="text-lg font-semibold">{project.name}</h3>
                     <p className="text-gray-500 text-sm mt-1">{project.description || "No description"}</p>
                   </div>
-                  <span className={`text-sm font-medium capitalize ${statusColor(project.status)}`}>
-                    {project.status}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className={`text-sm font-medium capitalize ${statusColor(project.status)}`}>
+                      {project.status}
+                    </span>
+                    <button onClick={(e) => handleDelete(e, project.id)}
+                      className="text-gray-600 hover:text-red-400 transition p-1" title="Delete project">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
                 <div className="flex gap-4 mt-3 text-xs text-gray-500">
                   {project.primary_language && <span>{project.primary_language}</span>}

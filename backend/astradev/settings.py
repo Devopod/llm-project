@@ -129,7 +129,14 @@ REST_FRAMEWORK = {
 
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
-CSRF_TRUSTED_ORIGINS = ['https://*.ngrok-free.dev', 'http://localhost:3000', 'http://localhost:8000']
+CORS_ALLOW_HEADERS = ['*']
+CORS_ALLOW_METHODS = ['DELETE', 'GET', 'OPTIONS', 'PATCH', 'POST', 'PUT']
+CSRF_TRUSTED_ORIGINS = [
+    'https://*.ngrok-free.dev',
+    'https://*.devinapps.com',
+    'http://localhost:3000',
+    'http://localhost:8000',
+]
 
 # Groq API Configuration
 GROQ_API_KEY_1 = os.getenv('GROQ_API_KEY_1')

@@ -13,4 +13,5 @@ urlpatterns = [
     path('<uuid:project_id>/files/', views.project_files, name='project-files'),
     path('<uuid:project_id>/apk/build/', build_apk, name='build-apk'),
     path('<uuid:project_id>/apk/download/', download_apk, name='download-apk'),
+    path('<uuid:project_id>/deploy/', views.deploy_project, name='deploy-project'),
 ]
