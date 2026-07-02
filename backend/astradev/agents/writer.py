@@ -16,27 +16,49 @@ Output format (MUST be valid JSON):
 {
   "files": [
     {
-      "action": "create",
+      "action": "create" or "modify",
       "path": "relative/file/path.ext",
-      "content": "full file content here"
+      "content": "THE ENTIRE COMPLETE FILE CONTENT - EVERY SINGLE LINE"
     }
   ],
   "explanation": "Brief explanation of what was created and why",
   "next_steps": "What should be done next (optional)"
 }
 
-STRICT RULES:
-- Write COMPLETE, FULL, RUNNABLE code — NEVER use placeholders like '...', '// rest of code', '# TODO', or 'pass'
-- Every file MUST be syntactically valid and immediately executable
-- Include ALL necessary imports at the top of each file
-- Include proper error handling and edge cases
-- Include type annotations where applicable
-- Follow language-specific best practices (PEP 8, ESLint, etc.)
-- Use existing project patterns if context is provided
-- Output valid JSON only — no markdown, no code fences around the JSON itself
-- File paths should be relative to project root
-- If a file is long, still include EVERY line — never abbreviate or skip sections
-- Code must pass syntax checking (python -c, node --check, tsc, etc.)"""
+ABSOLUTE NON-NEGOTIABLE RULES:
+1. EVERY file MUST contain the COMPLETE source code from line 1 to the LAST line.
+2. NEVER abbreviate, truncate, or skip ANY section of code.
+3. NEVER use placeholders like:
+   - '...'
+   - '// rest of code here'
+   - '# TODO: implement'
+   - 'pass'
+   - '/* ... */'
+   - '// ...'
+   - 'etc.'
+   - '# Add more as needed'
+4. NEVER say "similar to above" or "repeat the pattern" — write out EVERY line explicitly.
+5. Every file MUST be syntactically valid and immediately executable/runnable WITHOUT modification.
+6. Include ALL necessary imports, dependencies, and boilerplate at the top.
+7. Include proper error handling, edge cases, and input validation.
+8. Include type annotations where applicable (TypeScript, Python type hints).
+9. Follow language-specific best practices and conventions.
+10. Use relative fetch URLs (not absolute) for web apps that may be served behind a proxy.
+11. Output valid JSON only — no markdown, no code fences around the JSON.
+12. File paths should be relative to project root.
+13. If a file would be 500 lines, write all 500 lines — NEVER abbreviate.
+14. For HTML/CSS: include COMPLETE styling, ALL elements, ALL event handlers.
+15. For backends: include ALL routes, ALL models, ALL error responses.
+16. The code MUST work when saved directly to disk and run — it is the FINAL product.
+
+QUALITY STANDARDS:
+- Professional UI with modern CSS (gradients, shadows, animations, responsive design)
+- Proper folder structure (templates/, static/, src/, etc.)
+- README.md with setup instructions
+- requirements.txt or package.json with ALL dependencies
+- Production-ready error handling (try/except, try/catch, HTTP error responses)
+- Input validation and sanitization
+- Clean variable/function naming"""
 
     def execute(self, task_description: str, context: dict = None) -> dict:
         self.emit('action', f'Writing code: {task_description[:100]}...')
@@ -76,6 +98,15 @@ STRICT RULES:
                 }],
                 'explanation': 'Raw output (could not parse as structured JSON)',
             }
+
+        # Validate: reject files with placeholder content and regenerate if needed
+        placeholder_patterns = ['# TODO', '// TODO', '/* TODO', '...more', '// ...', '# ...', 'pass  #', '// rest of']
+        for f in output.get('files', []):
+            content = f.get('content', '')
+            has_placeholder = any(p in content for p in placeholder_patterns)
+            if has_placeholder and len(content) < 50:
+                logger.warning(f"Placeholder detected in {f.get('path')}, content too short")
+                f['content'] = f'# ERROR: Code generation incomplete for {f.get("path")}\n# Please regenerate this file\n'
 
         # Emit code for each file
         for f in output.get('files', []):

@@ -80,6 +80,12 @@ export const projects = {
   files: (id: string) => api.get(`/projects/${id}/files/`),
   deploy: (id: string, action: 'approve' | 'deny') =>
     api.post(`/projects/${id}/deploy/`, { action }),
+  fileContent: (id: string, path: string) =>
+    api.get(`/projects/${id}/file-content/${path}`),
+  editFile: (id: string, path: string, content: string) =>
+    api.put(`/projects/${id}/file-edit/${path}`, { content }),
+  editFileLines: (id: string, path: string, startLine: number, endLine: number, newContent: string) =>
+    api.put(`/projects/${id}/file-edit/${path}`, { start_line: startLine, end_line: endLine, new_content: newContent }),
 };
 
 export const workspaces = {

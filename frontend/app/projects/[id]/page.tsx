@@ -38,6 +38,9 @@ export default function ProjectPage() {
   const [activeTab, setActiveTab] = useState<"activity" | "files" | "terminal">("activity");
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState("");
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const [terminalOutput, setTerminalOutput] = useState("");
   const [terminalInput, setTerminalInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -121,12 +124,39 @@ export default function ProjectPage() {
 
   const handleFileClick = async (path: string) => {
     setSelectedFile(path);
+    setIsEditing(false);
+    setSaveStatus(null);
     try {
-      const res = await workspaces.fileContent(id, path);
-      setFileContent(res.data.content);
+      // Try new API first, fallback to workspace API
+      let content = "";
+      try {
+        const res = await projectsApi.fileContent(id, path);
+        content = res.data.content;
+      } catch {
+        const res = await workspaces.fileContent(id, path);
+        content = res.data.content;
+      }
+      setFileContent(content);
+      setEditContent(content);
       setActiveTab("files");
     } catch {
       setFileContent("Error loading file");
+      setEditContent("");
+    }
+  };
+
+  const handleFileSave = async () => {
+    if (!selectedFile) return;
+    setSaveStatus("saving");
+    try {
+      const res = await projectsApi.editFile(id, selectedFile, editContent);
+      setFileContent(res.data.content);
+      setSaveStatus("saved");
+      setIsEditing(false);
+      setTimeout(() => setSaveStatus(null), 2000);
+    } catch {
+      setSaveStatus("error");
+      setTimeout(() => setSaveStatus(null), 3000);
     }
   };
 
@@ -329,19 +359,67 @@ export default function ProjectPage() {
             )}
 
             {activeTab === "files" && (
-              <div>
+              <div className="h-full flex flex-col">
                 {selectedFile ? (
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="text-sm text-gray-400">{selectedFile}</span>
-                      <button onClick={() => setSelectedFile(null)} className="text-xs text-gray-500 hover:text-white">Close</button>
+                  <div className="flex flex-col h-full">
+                    <div className="flex items-center justify-between mb-3 shrink-0">
+                      <span className="text-sm text-gray-400 font-mono">{selectedFile}</span>
+                      <div className="flex items-center gap-2">
+                        {saveStatus === "saved" && <span className="text-xs text-green-400">Saved!</span>}
+                        {saveStatus === "error" && <span className="text-xs text-red-400">Save failed</span>}
+                        {saveStatus === "saving" && <span className="text-xs text-yellow-400">Saving...</span>}
+                        {isEditing ? (
+                          <>
+                            <button onClick={handleFileSave}
+                              className="text-xs px-2 py-1 bg-green-700 hover:bg-green-600 rounded transition">
+                              Save
+                            </button>
+                            <button onClick={() => { setIsEditing(false); setEditContent(fileContent); }}
+                              className="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded transition">
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button onClick={() => setIsEditing(true)}
+                            className="text-xs px-2 py-1 bg-indigo-700 hover:bg-indigo-600 rounded transition">
+                            Edit
+                          </button>
+                        )}
+                        <button onClick={() => setSelectedFile(null)} className="text-xs text-gray-500 hover:text-white">Close</button>
+                      </div>
                     </div>
-                    <pre className="bg-gray-900 border border-gray-700 rounded-lg p-4 overflow-x-auto">
-                      <code className="text-xs text-gray-200 font-mono whitespace-pre-wrap">{fileContent}</code>
-                    </pre>
+                    <div className="flex-1 overflow-auto bg-gray-900 border border-gray-700 rounded-lg">
+                      {isEditing ? (
+                        <div className="flex h-full">
+                          <div className="py-4 px-2 text-right select-none bg-gray-950 border-r border-gray-700">
+                            {editContent.split('\n').map((_, i) => (
+                              <div key={i} className="text-xs font-mono text-gray-600 leading-5">{i + 1}</div>
+                            ))}
+                          </div>
+                          <textarea
+                            value={editContent}
+                            onChange={(e) => setEditContent(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 's' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleFileSave(); } }}
+                            className="flex-1 p-4 bg-transparent text-xs text-gray-200 font-mono resize-none outline-none leading-5 whitespace-pre"
+                            spellCheck={false}
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex">
+                          <div className="py-4 px-2 text-right select-none bg-gray-950 border-r border-gray-700">
+                            {fileContent.split('\n').map((_, i) => (
+                              <div key={i} className="text-xs font-mono text-gray-600 leading-5">{i + 1}</div>
+                            ))}
+                          </div>
+                          <pre className="p-4 overflow-x-auto flex-1">
+                            <code className="text-xs text-gray-200 font-mono whitespace-pre leading-5">{fileContent}</code>
+                          </pre>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ) : (
-                  <p className="text-gray-500">Select a file from the sidebar to view</p>
+                  <p className="text-gray-500">Select a file from the sidebar to view and edit</p>
                 )}
               </div>
             )}
