@@ -19,7 +19,9 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
+    const url = error.config?.url || '';
+    const isAuthEndpoint = url.includes('/auth/login') || url.includes('/auth/signup') || url.includes('/auth/refresh') || url.includes('/auth/admin/login');
+    if (error.response?.status === 401 && typeof window !== 'undefined' && !isAuthEndpoint) {
       const refreshToken = localStorage.getItem('refresh_token');
       if (refreshToken) {
         try {
