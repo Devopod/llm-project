@@ -126,7 +126,7 @@ def divide(a, b):
             document.getElementById('error').textContent = '';
             if (!num1 || !num2) { document.getElementById('error').textContent = 'Please enter both numbers'; return; }
             try {
-                const res = await fetch('/calculate', {
+                const res = await fetch('calculate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({num1: parseFloat(num1), num2: parseFloat(num2), operation: selectedOp})
