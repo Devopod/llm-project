@@ -14,52 +14,39 @@ KEYS = [
     ('key_2', settings.GROQ_API_KEY_2),
 ]
 
-TOKEN_LIMIT_PER_WINDOW = 7500
-WINDOW_SECONDS = 60
-
 
 class GroqClient:
     def __init__(self):
         self.model = settings.GROQ_MODEL
-        self.disabled_keys = set()
 
-    def _get_token_usage(self, key_label):
-        now = time.time()
-        redis_key = f"token_usage:{key_label}"
+    def _is_key_disabled(self, key_label):
         try:
-            _redis.zremrangebyscore(redis_key, '-inf', now - WINDOW_SECONDS)
-            total = 0
-            entries = _redis.zrangebyscore(redis_key, now - WINDOW_SECONDS, '+inf', withscores=True)
-            for value, score in entries:
-                total += int(value)
-            return total
+            disabled_until = _redis.get(f"groq_disabled:{key_label}")
+            if disabled_until:
+                return float(disabled_until) > time.time()
         except Exception:
-            return 0
+            pass
+        return False
 
-    def _record_token_usage(self, key_label, tokens):
-        now = time.time()
-        redis_key = f"token_usage:{key_label}"
+    def _disable_key(self, key_label, seconds=300):
         try:
-            _redis.zadd(redis_key, {f"{tokens}:{now}": now})
-            _redis.expire(redis_key, WINDOW_SECONDS * 2)
+            _redis.setex(f"groq_disabled:{key_label}", seconds, str(time.time() + seconds))
         except Exception:
             pass
 
     def get_available_key(self):
         for key_label, key_value in KEYS:
-            if key_label in self.disabled_keys:
-                continue
-            usage = self._get_token_usage(key_label)
-            if usage < TOKEN_LIMIT_PER_WINDOW:
+            if not self._is_key_disabled(key_label):
                 return key_label, key_value
         return None, None
 
-    def call(self, messages, stream=True, max_retries=5):
+    def call(self, messages, stream=False, max_retries=10):
+        last_error = None
         for attempt in range(max_retries):
             key_label, key_value = self.get_available_key()
             if not key_value:
-                wait_time = min(2 ** attempt, 30)
-                logger.warning(f"All keys exhausted, waiting {wait_time}s")
+                wait_time = min(15 + attempt * 5, 60)
+                logger.warning(f"All keys disabled, waiting {wait_time}s (attempt {attempt+1})")
                 time.sleep(wait_time)
                 continue
 
@@ -70,25 +57,31 @@ class GroqClient:
                 else:
                     return self._sync_call(client, messages, key_label)
             except Exception as e:
+                last_error = e
                 error_str = str(e)
-                if '401' in error_str:
-                    logger.error(f"Key {key_label} is invalid, disabling")
-                    self.disabled_keys.add(key_label)
+                if '401' in error_str or 'invalid' in error_str.lower():
+                    logger.error(f"Key {key_label} is invalid, disabling permanently")
+                    self._disable_key(key_label, 86400)
                 elif '429' in error_str:
-                    logger.warning(f"Rate limited on {key_label}, trying next key")
-                    self._record_token_usage(key_label, TOKEN_LIMIT_PER_WINDOW)
+                    if 'tokens per day' in error_str or 'TPD' in error_str:
+                        logger.warning(f"Key {key_label} hit daily limit, disabling for 1 hour")
+                        self._disable_key(key_label, 3600)
+                    else:
+                        logger.warning(f"Key {key_label} rate limited, disabling for 60s")
+                        self._disable_key(key_label, 60)
+                    time.sleep(2)
                 else:
-                    logger.error(f"Groq API error on attempt {attempt+1}: {error_str}")
-                    time.sleep(min(2 ** attempt, 16))
+                    logger.error(f"Groq API error on attempt {attempt+1}: {error_str[:200]}")
+                    time.sleep(min(3 * (attempt + 1), 15))
 
-        raise Exception("All Groq API retries exhausted")
+        raise Exception(f"All Groq API retries exhausted: {last_error}")
 
     def _sync_call(self, client, messages, key_label):
         response = client.chat.completions.create(
             model=self.model,
             messages=messages,
-            temperature=1,
-            max_tokens=2048,
+            temperature=0.7,
+            max_tokens=4096,
             top_p=1,
             stream=False,
             stop=None,
@@ -96,7 +89,6 @@ class GroqClient:
         content = response.choices[0].message.content or ''
         tokens_in = response.usage.prompt_tokens if response.usage else 0
         tokens_out = response.usage.completion_tokens if response.usage else 0
-        self._record_token_usage(key_label, tokens_in + tokens_out)
         return {
             'content': content,
             'tokens_input': tokens_in,
@@ -108,8 +100,8 @@ class GroqClient:
         stream = client.chat.completions.create(
             model=self.model,
             messages=messages,
-            temperature=1,
-            max_tokens=2048,
+            temperature=0.7,
+            max_tokens=4096,
             top_p=1,
             stream=True,
             stop=None,
@@ -120,9 +112,6 @@ class GroqClient:
                 delta = chunk.choices[0].delta.content
                 full_content += delta
                 yield {'type': 'chunk', 'content': delta}
-
-        estimated_tokens = len(full_content) // 4 + sum(len(m.get('content', '')) for m in messages) // 4
-        self._record_token_usage(key_label, estimated_tokens)
 
         yield {
             'type': 'done',
