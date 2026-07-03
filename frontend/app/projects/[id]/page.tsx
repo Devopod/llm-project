@@ -62,12 +62,17 @@ export default function ProjectPage() {
       }));
       setMessages(msgs);
       // Check if there's an existing deploy_prompt in history
-      if (msgs.some((m: Message) => m.type === "deploy_prompt")) {
+      const deployPromptIdx = msgs.findIndex((m: Message) => m.type === "deploy_prompt");
+      if (deployPromptIdx >= 0) {
         setDeployPromptShown(true);
-      }
-      // Check if deployment was already triggered
-      if (msgs.some((m: Message) => m.type === "deployment")) {
-        setDeployTriggered(true);
+        // Only mark as triggered if there's a deployment message AFTER the prompt
+        // (indicating user already clicked Approve)
+        const hasPostPromptDeploy = msgs.slice(deployPromptIdx + 1).some(
+          (m: Message) => m.type === "deployment"
+        );
+        if (hasPostPromptDeploy) {
+          setDeployTriggered(true);
+        }
       }
     }).catch(() => {});
     projectsApi.roadmap(id).then((res) => setTasks(res.data.tasks || [])).catch(() => {});
