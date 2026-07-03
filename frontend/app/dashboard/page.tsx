@@ -111,11 +111,11 @@ export default function DashboardPage() {
           <h1 className="text-3xl font-bold">My Projects</h1>
           <div className="flex gap-3">
             <button onClick={() => { if (fileInputRef.current) fileInputRef.current.click(); }}
-              className="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg transition flex items-center gap-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              className="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg transition flex items-center gap-2 group">
+              <svg className="w-5 h-5 text-indigo-400 group-hover:text-indigo-300" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
               </svg>
-              Upload Project
+              <span>Upload Project</span>
             </button>
             <input ref={fileInputRef} type="file" multiple accept=".zip,.7z,.tar.gz,.tgz,.py,.js,.ts,.tsx,.jsx,.html,.htm,.css,.scss,.json,.yaml,.yml,.xml,.md,.txt,.java,.kt,.swift,.go,.rs,.rb,.php,.c,.cpp,.h,.hpp,.cs,.sql,.sh,.bash,.toml,.ini,.cfg,.dockerfile,.makefile,.gradle,.vue,.svelte,.dart,.lua,.pl,.r,.graphql" onChange={handleFileSelect} className="hidden" />
             <button onClick={() => setShowCreate(true)}
