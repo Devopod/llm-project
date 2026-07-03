@@ -270,15 +270,17 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
         }
 
         if task_type == 'write_code':
+            # Pass full content of existing files so the writer can merge changes
+            existing_file_contents = self._read_workspace_file_contents()
+            if existing_file_contents:
+                context['existing_file_contents'] = existing_file_contents
+                context['existing_files'] = list(existing_file_contents.keys())
             result = self.writer.execute(description, context)
-            # Write files to workspace (writer.edit_file already writes,
-            # but _write_file also creates FileRecord if not done)
             for file_info in result.get('files', []):
                 path = file_info.get('path', '')
                 content = file_info.get('content', '')
                 if path and content:
                     self._write_file(path, content)
-            # Inline validation done by writer agent and Phase 3 pipeline
             return result
 
         elif task_type == 'read_code':
@@ -372,6 +374,32 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
                 except (UnicodeDecodeError, OSError):
                     pass
         return '\n'.join(result)[:5000]
+
+    def _read_workspace_file_contents(self) -> dict:
+        """Read full content of all workspace files for context-aware editing."""
+        contents = {}
+        if not os.path.exists(self.workspace_path):
+            return contents
+        skip_dirs = {'node_modules', '.git', '__pycache__', 'venv', '.venv'}
+        skip_prefixes = ('_astradev',)
+        for root, dirs, files in os.walk(self.workspace_path):
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
+            for fname in files:
+                fpath = os.path.join(root, fname)
+                rel_path = os.path.relpath(fpath, self.workspace_path)
+                if any(rel_path.startswith(p) for p in skip_prefixes):
+                    continue
+                try:
+                    with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read(4000)
+                    contents[rel_path] = content
+                except (UnicodeDecodeError, OSError):
+                    pass
+                if len(contents) >= 20:
+                    break
+            if len(contents) >= 20:
+                break
+        return contents
 
     def _update_project_state(self):
         file_tree = {}

@@ -35,15 +35,24 @@ Output format (MUST be valid JSON — no markdown fences):
 {
   "files": [
     {"action": "create", "path": "relative/path.ext", "content": "COMPLETE FILE"},
-    {"action": "edit", "path": "existing/file.ext", "content": "COMPLETE UPDATED FILE"}
+    {"action": "edit", "path": "existing/file.ext", "content": "COMPLETE UPDATED FILE WITH ALL ORIGINAL CODE PRESERVED"},
+    {"action": "delete", "path": "file/to/remove.ext"}
   ],
   "explanation": "Brief explanation"
 }
 
 Actions:
 - "create": Create a new file (will overwrite if exists)
-- "edit": Modify an existing file — output the COMPLETE updated file content
+- "edit": Modify an existing file — you MUST preserve ALL existing code and ONLY add/change what was requested. Output the COMPLETE file with changes merged in.
 - "delete": Delete an existing file (no content needed)
+
+CRITICAL EDITING RULES (for "edit" action):
+- When editing an existing file, you will receive the FULL CURRENT CONTENT in the context.
+- You MUST include ALL original functions, classes, routes, imports — everything that was there before.
+- ONLY add, modify, or remove what the user specifically asked for.
+- NEVER replace the entire file with just the new code — merge the new code INTO the existing file.
+- If asked to "add a /health endpoint", keep ALL existing routes and ADD the new one.
+- If asked to "change function X", keep ALL other functions unchanged.
 
 ABSOLUTE RULES:
 1. EVERY file MUST be COMPLETE — line 1 to last line. NEVER truncate.
@@ -59,7 +68,8 @@ ABSOLUTE RULES:
 11. Every Python file must have valid syntax that passes ast.parse().
 12. Every HTML file must have matching opening/closing tags.
 13. Every JSON file must be valid JSON.
-14. Every YAML file must be valid YAML."""
+14. Every YAML file must be valid YAML.
+15. When editing existing files, do NOT create unnecessary new files — only touch what's needed."
 
     def execute(self, task_description: str, context: dict = None) -> dict:
         self.emit('action', f'Writing code: {task_description[:100]}...')
@@ -70,6 +80,11 @@ ABSOLUTE RULES:
                 extra_context += f"Project state:\n{json.dumps(context['project_state'], indent=2)}\n"
             if 'existing_files' in context:
                 extra_context += f"Existing files:\n{json.dumps(context['existing_files'])}\n"
+            # Pass full file contents so the agent can merge changes
+            if 'existing_file_contents' in context:
+                extra_context += "\nFULL CONTENT OF EXISTING FILES (you MUST preserve all existing code when editing):\n"
+                for fp, fc in context['existing_file_contents'].items():
+                    extra_context += f"\n--- {fp} ---\n{fc}\n"
 
         messages = self.build_messages(task_description, extra_context)
         result = self.call_groq(messages, stream=False)
