@@ -34,10 +34,16 @@ When asked to create or modify files, output COMPLETE file content as a JSON res
 Output format (MUST be valid JSON — no markdown fences):
 {
   "files": [
-    {"action": "create", "path": "relative/path.ext", "content": "COMPLETE FILE"}
+    {"action": "create", "path": "relative/path.ext", "content": "COMPLETE FILE"},
+    {"action": "edit", "path": "existing/file.ext", "content": "COMPLETE UPDATED FILE"}
   ],
   "explanation": "Brief explanation"
 }
+
+Actions:
+- "create": Create a new file (will overwrite if exists)
+- "edit": Modify an existing file — output the COMPLETE updated file content
+- "delete": Delete an existing file (no content needed)
 
 ABSOLUTE RULES:
 1. EVERY file MUST be COMPLETE — line 1 to last line. NEVER truncate.
@@ -77,18 +83,45 @@ ABSOLUTE RULES:
         # Validate and repair all files
         output = self._validate_and_repair_all(output, task_description, extra_context)
 
-        # Write validated files to workspace
+        # Write validated files to workspace / delete files
         for f in output.get('files', []):
             file_path = f.get('path', '')
+            action = f.get('action', 'create')
             file_content = f.get('content', '')
-            if file_path and file_content:
+
+            if action == 'delete' and file_path:
+                self._delete_file(file_path)
+                self.emit('action', f'Deleted file: {file_path}', {
+                    'file_path': file_path,
+                    'action': 'delete',
+                })
+            elif file_path and file_content:
                 self.edit_file(file_path, file_content)
-            self.emit('code', file_content[:500], {
-                'file_path': file_path,
-                'action': f.get('action', 'create'),
-            })
+                self.emit('code', file_content[:500], {
+                    'file_path': file_path,
+                    'action': action,
+                })
 
         return output
+
+    def _delete_file(self, file_path: str):
+        """Delete a file from the workspace."""
+        import os
+        workspace = f"/tmp/astradev_workspaces/{self.project.id}"
+        full_path = os.path.join(workspace, file_path)
+        real_full = os.path.realpath(full_path)
+        real_ws = os.path.realpath(workspace)
+        if not real_full.startswith(real_ws):
+            logger.warning(f"Path traversal blocked: {file_path}")
+            return
+        if os.path.isfile(full_path):
+            os.remove(full_path)
+            logger.info(f"Deleted file: {file_path}")
+            # Update file tree
+            file_tree = self.project.project_state.get('file_tree', {})
+            file_tree.pop(file_path, None)
+            self.project.project_state['file_tree'] = file_tree
+            self.project.save(update_fields=['project_state'])
 
     # ------------------------------------------------------------------
     # JSON Output Parsing

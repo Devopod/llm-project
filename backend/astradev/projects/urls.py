@@ -4,6 +4,7 @@ from .apk_views import build_apk, download_apk
 
 urlpatterns = [
     path('', views.project_list, name='project-list'),
+    path('upload/', views.project_upload, name='project-upload'),
     path('<uuid:project_id>/', views.project_detail, name='project-detail'),
     path('<uuid:project_id>/pause/', views.project_pause, name='project-pause'),
     path('<uuid:project_id>/resume/', views.project_resume, name='project-resume'),

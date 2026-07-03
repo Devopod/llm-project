@@ -3,6 +3,8 @@ import { useEffect, useState, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { projects as projectsApi, workspaces } from "@/lib/api";
 import { ProjectWebSocket } from "@/lib/websocket";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 interface Message {
   type: string;
@@ -203,8 +205,32 @@ export default function ProjectPage() {
     }
   };
 
+  const getLanguage = (path: string): string => {
+    const ext = path.split('.').pop()?.toLowerCase() || '';
+    const langMap: Record<string, string> = {
+      py: 'python', js: 'javascript', ts: 'typescript', tsx: 'tsx', jsx: 'jsx',
+      html: 'html', htm: 'html', css: 'css', scss: 'scss', less: 'less',
+      json: 'json', yaml: 'yaml', yml: 'yaml', xml: 'xml', svg: 'xml',
+      md: 'markdown', sh: 'bash', bash: 'bash', zsh: 'bash',
+      java: 'java', kt: 'kotlin', kts: 'kotlin', swift: 'swift',
+      go: 'go', rs: 'rust', rb: 'ruby', php: 'php',
+      c: 'c', cpp: 'cpp', h: 'c', hpp: 'cpp',
+      cs: 'csharp', sql: 'sql', r: 'r',
+      dart: 'dart', lua: 'lua', perl: 'perl', pl: 'perl',
+      toml: 'toml', ini: 'ini', cfg: 'ini',
+      dockerfile: 'docker', makefile: 'makefile',
+      graphql: 'graphql', gql: 'graphql',
+      txt: 'text',
+    };
+    const name = path.split('/').pop()?.toLowerCase() || '';
+    if (name === 'dockerfile') return 'docker';
+    if (name === 'makefile') return 'makefile';
+    if (name.startsWith('.env')) return 'bash';
+    if (name === '.gitignore' || name === '.dockerignore') return 'bash';
+    return langMap[ext] || 'text';
+  };
+
   const handleDeploy = async (action: 'approve' | 'deny') => {
-    if (action === 'approve' && !confirm("Deploy this project? The app will be deployed to a public URL.")) return;
     try {
       const res = await projectsApi.deploy(id, action);
       setMessages((prev) => [...prev, {
@@ -447,15 +473,23 @@ export default function ProjectPage() {
                           />
                         </div>
                       ) : (
-                        <div className="flex">
+                        <div className="flex syntax-view">
                           <div className="py-4 px-2 text-right select-none bg-gray-950 border-r border-gray-700">
                             {fileContent.split('\n').map((_, i) => (
                               <div key={i} className="text-xs font-mono text-gray-600 leading-5">{i + 1}</div>
                             ))}
                           </div>
-                          <pre className="p-4 overflow-x-auto flex-1">
-                            <code className="text-xs text-gray-200 font-mono whitespace-pre leading-5">{fileContent}</code>
-                          </pre>
+                          <div className="flex-1 overflow-x-auto">
+                            <SyntaxHighlighter
+                              language={getLanguage(selectedFile || '')}
+                              style={oneDark}
+                              showLineNumbers={false}
+                              customStyle={{ margin: 0, padding: '1rem', background: 'transparent', fontSize: '0.75rem', lineHeight: '1.25rem' }}
+                              codeTagProps={{ style: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' } }}
+                            >
+                              {fileContent}
+                            </SyntaxHighlighter>
+                          </div>
                         </div>
                       )}
                     </div>

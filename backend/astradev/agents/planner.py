@@ -35,7 +35,16 @@ Rules:
 - Include a deployment task at the end if it's a web application
 - Keep task count between 3-15 for manageable execution
 - Always start with project setup/scaffolding
-- End with documentation and deployment"""
+- End with documentation and deployment
+
+IMPORTANT — Working with EXISTING projects:
+- If context mentions "existing_project": true, the workspace already has files
+- DO NOT recreate files that already exist — only modify or add what's needed
+- Use action "edit" for modifying existing files, "create" only for NEW files
+- Read existing files before planning changes
+- Keep the existing project structure intact
+- Only touch files relevant to the user's request
+- DO NOT generate setup/scaffolding tasks if the project is already set up"""
 
     def execute(self, prompt: str, context: dict = None) -> dict:
         self.emit('thinking', 'Creating development plan...')

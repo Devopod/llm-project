@@ -86,6 +86,19 @@ export const projects = {
     api.put(`/projects/${id}/file-edit/${path}`, { content }),
   editFileLines: (id: string, path: string, startLine: number, endLine: number, newContent: string) =>
     api.put(`/projects/${id}/file-edit/${path}`, { start_line: startLine, end_line: endLine, new_content: newContent }),
+  upload: (files: File | File[], name?: string, prompt?: string) => {
+    const formData = new FormData();
+    const fileList = Array.isArray(files) ? files : [files];
+    for (const f of fileList) {
+      formData.append('files', f);
+    }
+    if (name) formData.append('name', name);
+    if (prompt) formData.append('prompt', prompt);
+    return api.post('/projects/upload/', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    });
+  },
 };
 
 export const workspaces = {

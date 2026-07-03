@@ -53,14 +53,74 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
         self.memory = MemoryAgent(project)
         self.workspace_path = f"/tmp/astradev_workspaces/{project.id}"
 
+    def _get_existing_files_context(self) -> str:
+        """Build context about existing files in the workspace for uploaded projects."""
+        if not os.path.isdir(self.workspace_path):
+            return ''
+
+        existing_files = []
+        for root, dirs, fnames in os.walk(self.workspace_path):
+            dirs[:] = [d for d in dirs if d not in ('__pycache__', 'node_modules', '.git', '.venv', 'venv')]
+            for fname in fnames:
+                full = os.path.join(root, fname)
+                rel = os.path.relpath(full, self.workspace_path)
+                if rel.startswith('_astradev'):
+                    continue
+                try:
+                    size = os.path.getsize(full)
+                except OSError:
+                    size = 0
+                existing_files.append(f"  {rel} ({size} bytes)")
+
+        if not existing_files:
+            return ''
+
+        # Read first few lines of key files for context
+        snippets = []
+        for root, dirs, fnames in os.walk(self.workspace_path):
+            dirs[:] = [d for d in dirs if d not in ('__pycache__', 'node_modules', '.git', '.venv')]
+            for fname in fnames:
+                full = os.path.join(root, fname)
+                rel = os.path.relpath(full, self.workspace_path)
+                if rel.startswith('_astradev'):
+                    continue
+                try:
+                    with open(full, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read(500)
+                    snippets.append(f"--- {rel} ---\n{content}")
+                except Exception:
+                    pass
+                if len(snippets) >= 10:
+                    break
+            if len(snippets) >= 10:
+                break
+
+        ctx = f"\n\nEXISTING PROJECT FILES ({len(existing_files)} files):\n"
+        ctx += "\n".join(existing_files[:50])
+        if snippets:
+            ctx += "\n\nFILE PREVIEWS:\n" + "\n\n".join(snippets)
+        return ctx
+
     def execute(self, prompt: str, context: dict = None) -> dict:
         try:
             self.project.status = 'planning'
             self.project.save(update_fields=['status'])
             self.emit('thinking', f'Analyzing request: {prompt[:100]}...')
 
+            # Detect if this is an existing project (uploaded or previously built)
+            is_existing_project = bool(
+                self.project.project_state.get('uploaded')
+                or self.project.project_state.get('file_tree')
+            )
+            existing_context = self._get_existing_files_context() if is_existing_project else ''
+
             # Phase 1: Planning
-            plan = self.planner.execute(prompt, context)
+            planning_context = context or {}
+            if is_existing_project:
+                planning_context['existing_project'] = True
+                planning_context['existing_files_context'] = existing_context
+
+            plan = self.planner.execute(prompt, planning_context)
             tasks = plan.get('tasks', [])
             self.project.roadmap = plan
             self.project.save(update_fields=['roadmap'])

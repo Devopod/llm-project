@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { projects as projectsApi } from "@/lib/api";
 import { useProjectStore } from "@/lib/store";
@@ -9,11 +9,17 @@ export default function DashboardPage() {
   const router = useRouter();
   const { projects, setProjects } = useProjectStore();
   const [showCreate, setShowCreate] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [buildApk, setBuildApk] = useState(false);
   const [error, setError] = useState("");
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [uploadName, setUploadName] = useState("");
+  const [uploadPrompt, setUploadPrompt] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const token = localStorage.getItem("access_token");
@@ -50,6 +56,33 @@ export default function DashboardPage() {
     }
   };
 
+  const handleUpload = async () => {
+    if (uploadFiles.length === 0) return;
+    setUploading(true);
+    setError("");
+    try {
+      const res = await projectsApi.upload(uploadFiles, uploadName || undefined, uploadPrompt || undefined);
+      setProjects([res.data, ...projects]);
+      router.push(`/projects/${res.data.id}`);
+    } catch (e: any) {
+      setError(e.response?.data?.error?.message || "Upload failed. Please try again.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(e.target.files || []);
+    if (selected.length > 0) {
+      setUploadFiles(selected);
+      if (!uploadName && selected.length === 1) {
+        const baseName = selected[0].name.replace(/\.(zip|7z|tar\.gz|tgz)$/i, '');
+        setUploadName(baseName);
+      }
+      setShowUpload(true);
+    }
+  };
+
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (!confirm("Delete this project? This cannot be undone.")) return;
@@ -76,11 +109,66 @@ export default function DashboardPage() {
       <main className="max-w-5xl mx-auto px-6 py-8">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-3xl font-bold">My Projects</h1>
-          <button onClick={() => setShowCreate(true)}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg transition">
-            + New Project
-          </button>
+          <div className="flex gap-3">
+            <button onClick={() => { if (fileInputRef.current) fileInputRef.current.click(); }}
+              className="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg transition flex items-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              Upload Project
+            </button>
+            <input ref={fileInputRef} type="file" multiple accept=".zip,.7z,.tar.gz,.tgz,.py,.js,.ts,.tsx,.jsx,.html,.htm,.css,.scss,.json,.yaml,.yml,.xml,.md,.txt,.java,.kt,.swift,.go,.rs,.rb,.php,.c,.cpp,.h,.hpp,.cs,.sql,.sh,.bash,.toml,.ini,.cfg,.dockerfile,.makefile,.gradle,.vue,.svelte,.dart,.lua,.pl,.r,.graphql" onChange={handleFileSelect} className="hidden" />
+            <button onClick={() => setShowCreate(true)}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg transition">
+              + New Project
+            </button>
+          </div>
         </div>
+
+        {showUpload && uploadFiles.length > 0 && (
+          <div className="mb-8 p-6 bg-gray-900 border border-gray-800 rounded-xl">
+            <h2 className="text-xl font-semibold mb-4">Upload Project</h2>
+            {error && <p className="text-red-400 text-sm mb-3">{error}</p>}
+            <div className="space-y-4">
+              <div className="p-3 bg-gray-800 rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8" />
+                    </svg>
+                    <span className="text-sm font-medium">{uploadFiles.length} file(s) selected</span>
+                  </div>
+                  <button onClick={() => { if (fileInputRef.current) fileInputRef.current.click(); }}
+                    className="text-xs text-indigo-400 hover:text-indigo-300">Change</button>
+                </div>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {uploadFiles.map((f, i) => (
+                    <div key={i} className="flex justify-between text-xs text-gray-400">
+                      <span className="truncate">{f.name}</span>
+                      <span className="text-gray-600 ml-2 shrink-0">{(f.size / 1024).toFixed(1)} KB</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <input type="text" placeholder="Project name" value={uploadName}
+                onChange={(e) => setUploadName(e.target.value)}
+                className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-indigo-500" />
+              <textarea placeholder="(Optional) Tell the agent what to do with this project... (e.g., Fix the login bug, Add dark mode, Update the API)" value={uploadPrompt}
+                onChange={(e) => setUploadPrompt(e.target.value)} rows={3}
+                className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-indigo-500 resize-none" />
+              <div className="flex gap-3">
+                <button onClick={handleUpload} disabled={uploading}
+                  className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded-lg transition">
+                  {uploading ? "Uploading..." : "Upload & Create"}
+                </button>
+                <button onClick={() => { setShowUpload(false); setUploadFiles([]); setUploadName(""); setUploadPrompt(""); }}
+                  className="px-6 py-2 border border-gray-700 rounded-lg hover:bg-gray-800 transition">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {showCreate && (
           <div className="mb-8 p-6 bg-gray-900 border border-gray-800 rounded-xl">
