@@ -185,6 +185,7 @@ def deploy_project(request, project_id):
 def project_file_content(request, project_id, file_path):
     """Get the full content of a specific file."""
     import os
+    file_path = file_path.strip('/')
     try:
         project = Project.objects.get(id=project_id, user=request.user)
     except Project.DoesNotExist:
@@ -222,6 +223,7 @@ def project_file_content(request, project_id, file_path):
 def project_file_edit(request, project_id, file_path):
     """Edit a file: full replace or line-range update."""
     import os
+    file_path = file_path.strip('/')
     try:
         project = Project.objects.get(id=project_id, user=request.user)
     except Project.DoesNotExist:
@@ -243,7 +245,9 @@ def project_file_edit(request, project_id, file_path):
 
     if content is not None:
         # Full file replace
-        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        parent_dir = os.path.dirname(full_path)
+        if parent_dir and not os.path.exists(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
         with open(full_path, 'w', encoding='utf-8') as f:
             f.write(content)
     elif start_line is not None and new_lines_content is not None:

@@ -108,8 +108,26 @@ def deploy_project_task(self, project_id: str):
                         app_file = f
                         break
             if app_file:
+                # Install Flask if needed
+                req_file = os.path.join(workspace, 'requirements.txt')
+                if os.path.isfile(req_file):
+                    subprocess.run(['pip3', 'install', '-r', req_file],
+                                   cwd=workspace, capture_output=True, timeout=60)
+                else:
+                    subprocess.run(['pip3', 'install', 'flask'],
+                                   capture_output=True, timeout=30)
+                # Patch app.run() to use dynamic port
+                app_content = open(os.path.join(workspace, app_file)).read()
+                import re
+                patched = re.sub(
+                    r"app\.run\([^)]*\)",
+                    f"app.run(host='0.0.0.0', port={port}, debug=False)",
+                    app_content
+                )
+                if patched != app_content:
+                    with open(os.path.join(workspace, app_file), 'w') as pf:
+                        pf.write(patched)
                 start_cmd = ['python3', app_file]
-                os.environ['FLASK_RUN_PORT'] = str(port)
             else:
                 start_cmd = ['python3', '-m', 'http.server', str(port)]
         elif has_django:

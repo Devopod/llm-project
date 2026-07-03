@@ -130,7 +130,35 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
                         db_task.save()
                         self.emit('error', f'Task failed: {db_task.title} - {str(e)[:200]}')
 
-            # Phase 3: Finalize
+            # Phase 3: Auto-fix any errors detected
+            error_msgs = list(
+                self.project.messages
+                .filter(message_type='error')
+                .order_by('-created_at')[:3]
+            )
+            fix_attempts = 0
+            while error_msgs and fix_attempts < 3:
+                fix_attempts += 1
+                for err_msg in error_msgs:
+                    self.emit('action', f'Auto-fix attempt {fix_attempts}: {err_msg.content[:100]}')
+                    try:
+                        files_content = self._read_workspace_files()
+                        fix_result = self.debugger.execute(
+                            f"Fix this error: {err_msg.content}",
+                            {'error': err_msg.content, 'code': files_content}
+                        )
+                        for file_info in fix_result.get('files', []):
+                            self._write_file(file_info['path'], file_info.get('content', ''))
+                        self.emit('fix', f'Applied fix for: {err_msg.content[:100]}')
+                    except Exception as fix_err:
+                        self.emit('error', f'Auto-fix failed: {str(fix_err)[:200]}')
+                error_msgs = list(
+                    self.project.messages
+                    .filter(message_type='error', created_at__gt=error_msgs[0].created_at)
+                    .order_by('-created_at')[:3]
+                )
+
+            # Phase 4: Finalize
             self._update_project_state()
             self.project.status = 'completed'
             self.project.completed_at = timezone.now()

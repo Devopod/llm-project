@@ -53,5 +53,15 @@ Rules:
         except (json.JSONDecodeError, IndexError):
             output = {'diagnosis': content, 'fixes': [], 'verification': ''}
 
+        # Apply fixes directly via edit_file
+        files = []
+        for fix in output.get('fixes', []):
+            file_path = fix.get('file', '')
+            file_content = fix.get('content', '')
+            if file_path and file_content:
+                self.edit_file(file_path, file_content)
+                files.append({'path': file_path, 'content': file_content})
+
         self.emit('fix', f"Fix applied: {output.get('diagnosis', '')[:200]}")
+        output['files'] = files
         return output

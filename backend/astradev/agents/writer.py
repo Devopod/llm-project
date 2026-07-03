@@ -108,10 +108,14 @@ QUALITY STANDARDS:
                 logger.warning(f"Placeholder detected in {f.get('path')}, content too short")
                 f['content'] = f'# ERROR: Code generation incomplete for {f.get("path")}\n# Please regenerate this file\n'
 
-        # Emit code for each file
+        # Write files to workspace and emit code
         for f in output.get('files', []):
-            self.emit('code', f.get('content', '')[:500], {
-                'file_path': f.get('path', ''),
+            file_path = f.get('path', '')
+            file_content = f.get('content', '')
+            if file_path and file_content:
+                self.edit_file(file_path, file_content)
+            self.emit('code', file_content[:500], {
+                'file_path': file_path,
                 'action': f.get('action', 'create'),
             })
 

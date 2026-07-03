@@ -38,6 +38,13 @@ Every file must be syntactically valid and immediately runnable."""
         content = result.get('content', '')
         parsed = self._parse_result(content)
 
+        # Apply refactored files via edit_file
+        for f in parsed.get('files', []):
+            file_path = f.get('path', '')
+            file_content = f.get('content', '')
+            if file_path and file_content:
+                self.edit_file(file_path, file_content)
+
         self.emit('output', f"Refactoring complete: {len(parsed.get('files', []))} files improved")
         return parsed
 

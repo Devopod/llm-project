@@ -1,10 +1,12 @@
 import json
 import logging
+import os
+import hashlib
 from datetime import datetime
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 
-from astradev.projects.models import Project, Message, TokenUsage
+from astradev.projects.models import Project, Message, TokenUsage, FileRecord
 from .groq_client import groq_client
 
 logger = logging.getLogger('astradev.agents')
@@ -83,3 +85,37 @@ class BaseAgent:
         )
         self.project.total_tokens_used += tokens_input + tokens_output
         self.project.save(update_fields=['total_tokens_used'])
+
+    def edit_file(self, relative_path: str, content: str):
+        """Write or overwrite a file in the project workspace."""
+        workspace = self.project.project_state.get(
+            'workspace_path', f'/tmp/astradev_workspaces/{self.project.id}'
+        )
+        full_path = os.path.join(workspace, relative_path)
+        parent = os.path.dirname(full_path)
+        if parent and not os.path.exists(parent):
+            os.makedirs(parent, exist_ok=True)
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+        FileRecord.objects.update_or_create(
+            project=self.project, path=relative_path,
+            defaults={'action': 'edited', 'content_hash': content_hash,
+                      'size_bytes': len(content.encode())},
+        )
+        file_tree = self.project.project_state.get('file_tree', {})
+        file_tree[relative_path] = {'type': 'file', 'size': len(content)}
+        self.project.project_state['file_tree'] = file_tree
+        self.project.save(update_fields=['project_state'])
+        self.emit('action', f'[{self.role}] Edited file: {relative_path}')
+
+    def read_file(self, relative_path: str) -> str:
+        """Read a file from the project workspace."""
+        workspace = self.project.project_state.get(
+            'workspace_path', f'/tmp/astradev_workspaces/{self.project.id}'
+        )
+        full_path = os.path.join(workspace, relative_path)
+        if not os.path.isfile(full_path):
+            return ''
+        with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
+            return f.read()
