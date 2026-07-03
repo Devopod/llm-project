@@ -8,6 +8,10 @@ from django.utils import timezone
 from astradev.projects.models import Project, Task, FileRecord
 from .base import BaseAgent
 from .planner import PlannerAgent
+from .validators import (
+    validate_workspace, validate_file, validate_runtime,
+    ValidationStatus, ProjectValidationReport,
+)
 from .writer import CodeWriterAgent
 from .reader import CodeReaderAgent
 from .reviewer import CodeReviewerAgent
@@ -130,7 +134,11 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
                         db_task.save()
                         self.emit('error', f'Task failed: {db_task.title} - {str(e)[:200]}')
 
-            # Phase 3: Auto-fix any errors detected
+            # Phase 3: Validation Pipeline
+            self.emit('action', 'Running validation pipeline...')
+            validation_passed = self._run_validation_pipeline()
+
+            # Phase 4: Auto-fix errors from logs
             error_msgs = list(
                 self.project.messages
                 .filter(message_type='error')
@@ -158,13 +166,29 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
                     .order_by('-created_at')[:3]
                 )
 
-            # Phase 4: Finalize
+            # Re-validate after fixes if there were problems
+            if not validation_passed:
+                self.emit('action', 'Re-validating after auto-fix...')
+                validation_passed = self._run_validation_pipeline()
+
+            # Phase 5: Multi-agent review
+            self._run_multi_agent_review()
+
+            # Phase 6: Store file hashes and metadata
+            self._store_file_metadata()
+
+            # Phase 7: Project completion gate
             self._update_project_state()
-            self.project.status = 'completed'
-            self.project.completed_at = timezone.now()
+            if validation_passed:
+                self.project.status = 'completed'
+                self.project.completed_at = timezone.now()
+                self.emit('success', 'Project completed — all validations passed!')
+            else:
+                self.project.status = 'completed'
+                self.project.completed_at = timezone.now()
+                self.emit('action', 'Project completed with warnings — some validations had issues')
             self.project.save()
 
-            self.emit('success', f'Project completed! Files created in workspace.')
             return {'status': 'completed', 'project_state': self.project.project_state}
 
         except Exception as e:
@@ -191,8 +215,7 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
                 content = file_info.get('content', '')
                 if path and content:
                     self._write_file(path, content)
-            # Post-write validation for Python files
-            self._validate_workspace_python()
+            # Inline validation done by writer agent and Phase 3 pipeline
             return result
 
         elif task_type == 'read_code':
@@ -303,53 +326,144 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
         }
         self.project.save(update_fields=['project_state'])
 
-    def _validate_workspace_python(self):
-        """Run AST parse on all Python files in workspace; log warnings for broken ones."""
-        import ast as ast_mod
+    def _run_validation_pipeline(self) -> bool:
+        """Run the full validation pipeline on all workspace files.
+        Returns True if all files pass, False otherwise."""
+        if not os.path.exists(self.workspace_path):
+            self.emit('action', 'No workspace to validate')
+            return True
+
+        report = validate_workspace(self.workspace_path)
+        total = len(report.file_reports)
+        passed = sum(1 for r in report.file_reports if r.passed)
+
+        self.emit('action', f'Validation: {passed}/{total} files passed')
+
+        if report.passed:
+            return True
+
+        # Auto-repair failed files
+        for file_report in report.failed_files:
+            path = file_report.file_path
+            failures = file_report.failures
+            fail_msgs = '; '.join(f.message for f in failures[:3])
+            self.emit('action', f'Repairing {path}: {fail_msgs}')
+
+            full_path = os.path.join(self.workspace_path, path)
+            try:
+                with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
+                    content = f.read()
+
+                repair_result = self.writer.execute(
+                    f"Fix the validation errors in '{path}'. Errors: {fail_msgs}. "
+                    f"Rewrite the COMPLETE corrected file. Current content:\n{content[:2000]}",
+                    {}
+                )
+                for fi in repair_result.get('files', []):
+                    new_content = fi.get('content', '')
+                    if new_content and len(new_content.strip()) > 10:
+                        new_report = validate_file(new_content, path)
+                        if new_report.passed or len(new_report.failures) < len(failures):
+                            self._write_file(fi.get('path', path), new_content)
+                            if new_report.passed:
+                                self.emit('fix', f'Repaired {path}')
+                            break
+            except Exception as e:
+                logger.warning(f"Validation repair failed for {path}: {e}")
+
+        # Re-check after repairs
+        final_report = validate_workspace(self.workspace_path)
+        final_passed = sum(1 for r in final_report.file_reports if r.passed)
+        self.emit('action', f'Post-repair validation: {final_passed}/{len(final_report.file_reports)} files passed')
+
+        # Store validation report in project state
+        self.project.project_state['validation'] = {
+            'total_files': len(final_report.file_reports),
+            'passed': final_passed,
+            'failed_files': [r.file_path for r in final_report.failed_files],
+            'timestamp': datetime.utcnow().isoformat(),
+        }
+        self.project.save(update_fields=['project_state'])
+
+        return final_report.passed
+
+    def _run_multi_agent_review(self):
+        """Run multi-agent review on generated files."""
+        try:
+            files_content = self._read_workspace_files()
+            if not files_content:
+                return
+
+            # Reviewer pass
+            self.emit('action', 'Running code review...')
+            try:
+                review_result = self.reviewer.execute(
+                    f"Review the code quality and completeness of this project. "
+                    f"Check for: missing error handling, security issues, incomplete logic.\n{files_content[:3000]}",
+                    {}
+                )
+                if review_result.get('issues'):
+                    for issue in review_result['issues'][:3]:
+                        self.emit('action', f'Review: {issue.get("description", "")[:100]}')
+            except Exception as e:
+                logger.debug(f"Review pass error: {e}")
+
+            # Security pass
+            self.emit('action', 'Running security check...')
+            try:
+                security_result = self.security.execute(
+                    f"Check for security vulnerabilities: hardcoded secrets, SQL injection, XSS, path traversal.\n{files_content[:3000]}",
+                    {}
+                )
+                if security_result.get('vulnerabilities'):
+                    for vuln in security_result['vulnerabilities'][:3]:
+                        self.emit('action', f'Security: {vuln.get("description", "")[:100]}')
+            except Exception as e:
+                logger.debug(f"Security pass error: {e}")
+        except Exception as e:
+            logger.debug(f"Multi-agent review error: {e}")
+
+    def _store_file_metadata(self):
+        """Store SHA256, line count, byte count, validation status for every file."""
         if not os.path.exists(self.workspace_path):
             return
-        broken = []
+
+        skip_dirs = {'node_modules', '.git', '__pycache__', 'venv', '.venv'}
         for root, dirs, files in os.walk(self.workspace_path):
-            dirs[:] = [d for d in dirs if d not in ('node_modules', '.git', '__pycache__', 'venv')]
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
             for fname in files:
-                if not fname.endswith('.py'):
-                    continue
                 fpath = os.path.join(root, fname)
                 rel = os.path.relpath(fpath, self.workspace_path)
                 try:
-                    with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
-                        source = f.read()
-                    if source.strip():
-                        ast_mod.parse(source)
-                except SyntaxError as e:
-                    broken.append((rel, f"Line {e.lineno}: {e.msg}"))
-                except Exception:
-                    pass
+                    with open(fpath, 'rb') as f:
+                        raw = f.read()
+                    content = raw.decode('utf-8', errors='replace')
+                    sha = hashlib.sha256(raw).hexdigest()
 
-        if broken:
-            for rel, err in broken:
-                self.emit('action', f'Syntax issue in {rel}: {err}')
-                # Attempt auto-repair via writer
-                try:
-                    with open(os.path.join(self.workspace_path, rel), 'r') as f:
-                        bad_content = f.read()
-                    repair_result = self.writer.execute(
-                        f"Fix the syntax error in '{rel}'. Error: {err}. "
-                        f"Rewrite the COMPLETE corrected file. Current content:\n{bad_content[:1500]}",
-                        {}
+                    report = validate_file(content, rel)
+
+                    FileRecord.objects.update_or_create(
+                        project=self.project,
+                        path=rel,
+                        defaults={
+                            'action': 'validated',
+                            'content_hash': sha,
+                            'size_bytes': len(raw),
+                            'metadata': {
+                                'line_count': content.count('\n') + 1,
+                                'encoding': 'utf-8',
+                                'syntax_ok': report.syntax_ok,
+                                'eof_ok': report.eof_ok,
+                                'validation_passed': report.passed,
+                                'validators': [
+                                    {'name': r.validator, 'status': r.status.value, 'message': r.message}
+                                    for r in report.results
+                                ],
+                            },
+                        }
                     )
-                    for fi in repair_result.get('files', []):
-                        if fi.get('path') == rel or not fi.get('path'):
-                            new_content = fi.get('content', '')
-                            if new_content and len(new_content.strip()) > 10:
-                                try:
-                                    ast_mod.parse(new_content)
-                                    self._write_file(rel, new_content)
-                                    self.emit('fix', f'Auto-repaired {rel}')
-                                except SyntaxError:
-                                    self.emit('action', f'Auto-repair for {rel} still has issues')
-                except Exception as repair_err:
-                    logger.warning(f"Auto-repair failed for {rel}: {repair_err}")
+                except Exception as e:
+                    logger.debug(f"Metadata store error for {rel}: {e}")
 
     def _get_agent_for_type(self, task_type: str) -> str:
         mapping = {

@@ -1,93 +1,27 @@
+"""
+AstraDev Code Writer Agent — Self-Healing Code Generation
+
+Flow:
+  1. Generate files via Groq LLM
+  2. Parse JSON output (handle nested wrappers)
+  3. Validate every file (syntax, AST, completeness, placeholders)
+  4. Auto-repair broken files (re-invoke LLM with error context)
+  5. Sanitize README (reject JSON wrapper, prompt leakage)
+  6. Only return files that pass validation
+"""
+
 import json
-import ast
 import logging
 import re
 from .base import BaseAgent
+from .validators import (
+    validate_file, validate_python_syntax, validate_markdown,
+    ValidationStatus, FileValidationReport,
+)
 
 logger = logging.getLogger('astradev.agents')
 
-
-def _validate_python_syntax(content: str) -> str | None:
-    """Return None if valid Python, or an error string."""
-    try:
-        ast.parse(content)
-        return None
-    except SyntaxError as e:
-        return f"Line {e.lineno}: {e.msg}"
-
-
-def _detect_truncation(content: str, path: str) -> bool:
-    """Heuristic: detect if a file was truncated mid-generation."""
-    stripped = content.rstrip()
-    if not stripped:
-        return True
-
-    # Python files
-    if path.endswith('.py'):
-        # Check for unclosed brackets/parens
-        opens = stripped.count('(') - stripped.count(')')
-        opens += stripped.count('[') - stripped.count(']')
-        opens += stripped.count('{') - stripped.count('}')
-        if opens > 2:
-            return True
-        # Check for unclosed triple-quote strings
-        triples = stripped.count('"""')
-        if triples % 2 != 0:
-            return True
-        triples_sq = stripped.count("'''")
-        if triples_sq % 2 != 0:
-            return True
-        # Syntax check
-        err = _validate_python_syntax(stripped)
-        if err and ('unexpected EOF' in err or 'expected' in err.lower()):
-            return True
-
-    # HTML files
-    if path.endswith('.html') or path.endswith('.htm'):
-        if '<html' in stripped.lower() and '</html>' not in stripped.lower():
-            return True
-        if '<body' in stripped.lower() and '</body>' not in stripped.lower():
-            return True
-
-    # JSON files
-    if path.endswith('.json'):
-        try:
-            json.loads(stripped)
-        except json.JSONDecodeError:
-            return True
-
-    # Generic: ends mid-word or mid-line (no newline at end)
-    last_line = stripped.split('\n')[-1]
-    if last_line and not last_line.strip() and len(stripped) > 100:
-        return True
-
-    return False
-
-
-def _has_placeholders(content: str) -> bool:
-    """Check if content has obvious placeholder/stub patterns."""
-    placeholder_patterns = [
-        r'#\s*TODO\s*:?\s*implement',
-        r'#\s*\.\.\.',
-        r'//\s*\.\.\.',
-        r'//\s*rest of',
-        r'#\s*rest of',
-        r'#\s*Add more',
-        r'#\s*continue',
-        r'pass\s*$',  # bare pass at end of file
-        r'raise NotImplementedError',
-    ]
-    lines = content.strip().split('\n')
-    # Only flag if the file is suspiciously short with placeholders
-    for pattern in placeholder_patterns:
-        for line in lines[-5:]:  # check last 5 lines
-            if re.search(pattern, line, re.IGNORECASE):
-                # bare 'pass' is fine in small stubs, but not in main logic
-                if 'pass' in line and len(lines) > 5:
-                    return True
-                elif 'pass' not in line:
-                    return True
-    return False
+MAX_REPAIR_ATTEMPTS = 3
 
 
 class CodeWriterAgent(BaseAgent):
@@ -95,32 +29,31 @@ class CodeWriterAgent(BaseAgent):
     system_prompt = """You are an expert software developer for AstraDev.
 You write clean, production-quality code in any language/framework.
 
-When asked to create or modify files, output the COMPLETE file content as a JSON response.
+When asked to create or modify files, output COMPLETE file content as a JSON response.
 
-Output format (MUST be valid JSON):
+Output format (MUST be valid JSON — no markdown fences):
 {
   "files": [
-    {
-      "action": "create" or "modify",
-      "path": "relative/file/path.ext",
-      "content": "THE ENTIRE COMPLETE FILE CONTENT - EVERY SINGLE LINE"
-    }
+    {"action": "create", "path": "relative/path.ext", "content": "COMPLETE FILE"}
   ],
-  "explanation": "Brief explanation of what was created and why"
+  "explanation": "Brief explanation"
 }
 
-CRITICAL RULES:
-1. EVERY file MUST be COMPLETE from line 1 to the last line. Never truncate.
-2. NEVER use placeholders: '...', '# TODO', 'pass', '// rest of code'.
+ABSOLUTE RULES:
+1. EVERY file MUST be COMPLETE — line 1 to last line. NEVER truncate.
+2. NEVER use: '...', '# TODO', 'pass' (as stub), '// rest of code', 'raise NotImplementedError'.
 3. Every file MUST be syntactically valid and immediately runnable.
 4. Include ALL imports, ALL functions, ALL error handling.
-5. Output valid JSON only - no markdown fences around the JSON.
-6. Use relative fetch URLs for web apps served behind a proxy.
-7. Keep each file focused and reasonably sized. Split large apps into multiple files.
-8. For Flask apps: put app creation in a top-level file (app.py), NOT inside packages.
-9. For web UIs: include COMPLETE HTML/CSS/JS with all event handlers."""
-
-    MAX_REPAIR_ATTEMPTS = 2
+5. Output ONLY valid JSON — no markdown, no code fences, no explanatory text before/after.
+6. Use RELATIVE fetch URLs for web apps (e.g., 'chat' not '/chat').
+7. For Flask: put app creation in a top-level app.py. Use proper template_folder paths.
+8. For HTML: include COMPLETE styling, all elements, all event handlers, closing tags.
+9. README.md content must be raw markdown — NOT wrapped in JSON.
+10. Keep files focused. Split large apps into multiple files.
+11. Every Python file must have valid syntax that passes ast.parse().
+12. Every HTML file must have matching opening/closing tags.
+13. Every JSON file must be valid JSON.
+14. Every YAML file must be valid YAML."""
 
     def execute(self, task_description: str, context: dict = None) -> dict:
         self.emit('action', f'Writing code: {task_description[:100]}...')
@@ -128,22 +61,24 @@ CRITICAL RULES:
         extra_context = ''
         if context:
             if 'project_state' in context:
-                extra_context += f"Current project state:\n{json.dumps(context['project_state'], indent=2)}\n"
+                extra_context += f"Project state:\n{json.dumps(context['project_state'], indent=2)}\n"
             if 'existing_files' in context:
                 extra_context += f"Existing files:\n{json.dumps(context['existing_files'])}\n"
 
         messages = self.build_messages(task_description, extra_context)
         result = self.call_groq(messages, stream=False)
-        content = result['content']
         self.log_token_usage(result['tokens_input'], result['tokens_output'], result['key_used'])
 
-        output = self._parse_output(content)
+        output = self._parse_output(result['content'])
 
-        # Validate and repair files
-        repaired_output = self._validate_and_repair(output, task_description, extra_context)
+        # Sanitize README files
+        self._sanitize_readmes(output)
 
-        # Write files to workspace and emit code
-        for f in repaired_output.get('files', []):
+        # Validate and repair all files
+        output = self._validate_and_repair_all(output, task_description, extra_context)
+
+        # Write validated files to workspace
+        for f in output.get('files', []):
             file_path = f.get('path', '')
             file_content = f.get('content', '')
             if file_path and file_content:
@@ -153,185 +88,255 @@ CRITICAL RULES:
                 'action': f.get('action', 'create'),
             })
 
-        return repaired_output
+        return output
 
+    # ------------------------------------------------------------------
+    # JSON Output Parsing
+    # ------------------------------------------------------------------
     def _parse_output(self, content: str) -> dict:
-        """Parse LLM output, handling various JSON wrapper formats."""
+        """Parse LLM output, handling various JSON formats and wrapper bugs."""
+        content = content.strip()
+
+        # Strip markdown code fences
+        if '```json' in content:
+            content = content.split('```json', 1)[1]
+            if '```' in content:
+                content = content.split('```', 1)[0]
+        elif content.startswith('```'):
+            content = content[3:]
+            if '```' in content:
+                content = content.rsplit('```', 1)[0]
+
+        content = content.strip()
+
         try:
-            # Strip markdown code fences
-            if '```json' in content:
-                content = content.split('```json')[1].split('```')[0]
-            elif '```' in content:
-                parts = content.split('```')
-                for part in parts[1:]:
-                    if '{' in part:
-                        content = part.split('```')[0] if '```' in part else part
-                        break
-
-            raw = json.loads(content.strip())
-
-            # Handle nested JSON wrapper: {"files": [{"path": "X", "content": "{\"files\": ...}"}]}
-            # This happens when the LLM wraps the entire output as the content of a single file
-            if isinstance(raw, dict) and 'files' in raw:
-                files = raw['files']
-                cleaned_files = []
-                for f in files:
-                    fc = f.get('content', '')
-                    # If a file's content is itself a JSON with 'files' key, it's a wrapper bug
-                    if isinstance(fc, str) and fc.strip().startswith('{') and '"files"' in fc[:50]:
-                        try:
-                            inner = json.loads(fc)
-                            if 'files' in inner:
-                                # Unwrap: use the inner files instead
-                                cleaned_files.extend(inner['files'])
-                                continue
-                        except (json.JSONDecodeError, KeyError):
-                            pass
-                    cleaned_files.append(f)
-                raw['files'] = cleaned_files
-
-                # Fix files whose content starts with JSON (wrong parse layer)
-                for f in raw['files']:
-                    fc = f.get('content', '')
-                    if isinstance(fc, str) and fc.strip().startswith('{'):
-                        try:
-                            parsed = json.loads(fc)
-                            # If content is a JSON dict with 'content' key, extract it
-                            if isinstance(parsed, dict) and 'content' in parsed:
-                                f['content'] = parsed['content']
-                        except (json.JSONDecodeError, KeyError):
-                            pass
-
-                return raw
+            raw = json.loads(content)
+        except json.JSONDecodeError:
+            # Try to find JSON in the content
+            json_match = re.search(r'\{[\s\S]*"files"[\s\S]*\}', content)
+            if json_match:
+                try:
+                    raw = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    return self._fallback_output(content)
             else:
-                return {'files': [], 'explanation': str(raw)}
+                return self._fallback_output(content)
 
-        except (json.JSONDecodeError, IndexError):
-            logger.warning("Failed to parse writer output as JSON")
-            return {
-                'files': [{
-                    'action': 'create',
-                    'path': 'output.txt',
-                    'content': content,
-                }],
-                'explanation': 'Raw output (could not parse as structured JSON)',
-            }
+        if not isinstance(raw, dict) or 'files' not in raw:
+            return self._fallback_output(content)
 
-    def _validate_and_repair(self, output: dict, task_description: str, extra_context: str) -> dict:
-        """Validate all files and attempt to repair broken ones."""
+        # Unwrap nested JSON wrappers
+        raw['files'] = self._unwrap_files(raw['files'])
+
+        return raw
+
+    def _unwrap_files(self, files: list) -> list:
+        """Fix JSON-in-JSON wrapper bugs where content is itself a JSON string."""
+        cleaned = []
+        for f in files:
+            if not isinstance(f, dict):
+                continue
+            content = f.get('content', '')
+
+            # If content is a JSON string containing 'files' array, unwrap it
+            if isinstance(content, str) and content.strip().startswith('{'):
+                try:
+                    inner = json.loads(content)
+                    if isinstance(inner, dict) and 'files' in inner:
+                        cleaned.extend(self._unwrap_files(inner['files']))
+                        continue
+                    elif isinstance(inner, dict) and 'content' in inner:
+                        f['content'] = inner['content']
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            cleaned.append(f)
+        return cleaned
+
+    def _fallback_output(self, content: str) -> dict:
+        logger.warning("Failed to parse writer output as JSON, using raw content")
+        return {
+            'files': [{
+                'action': 'create',
+                'path': 'output.txt',
+                'content': content,
+            }],
+            'explanation': 'Raw output (could not parse as structured JSON)',
+        }
+
+    # ------------------------------------------------------------------
+    # README Sanitization
+    # ------------------------------------------------------------------
+    def _sanitize_readmes(self, output: dict):
+        """Fix README files that contain JSON wrappers or prompt leakage."""
+        for f in output.get('files', []):
+            path = f.get('path', '')
+            content = f.get('content', '')
+
+            if not path.lower().endswith('.md'):
+                continue
+
+            sanitized = self._sanitize_markdown(content, path)
+            if sanitized != content:
+                f['content'] = sanitized
+                self.emit('action', f'Sanitized {path} (removed JSON wrapper/leakage)')
+
+    def _sanitize_markdown(self, content: str, path: str) -> str:
+        """Remove JSON wrappers and prompt leakage from markdown content."""
+        stripped = content.strip()
+
+        # Case 1: Content is a JSON object with 'files' or 'content' key
+        if stripped.startswith('{') or stripped.startswith('['):
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, dict):
+                    if 'content' in parsed:
+                        return self._sanitize_markdown(parsed['content'], path)
+                    if 'files' in parsed:
+                        for f in parsed['files']:
+                            if isinstance(f, dict) and f.get('path', '').endswith('.md'):
+                                return self._sanitize_markdown(f.get('content', ''), path)
+                elif isinstance(parsed, list):
+                    for item in parsed:
+                        if isinstance(item, dict) and item.get('path', '').endswith('.md'):
+                            return self._sanitize_markdown(item.get('content', ''), path)
+            except json.JSONDecodeError:
+                pass
+
+        # Case 2: Content starts with conversational prefix
+        conv_prefixes = ['Here is', 'Here are', 'Sure,', 'Certainly', 'Of course',
+                         "I'll", 'Let me', 'Below is']
+        first_line = stripped.split('\n')[0] if stripped else ''
+        for prefix in conv_prefixes:
+            if first_line.startswith(prefix):
+                # Remove the first line
+                lines = stripped.split('\n', 1)
+                if len(lines) > 1:
+                    return lines[1].strip()
+
+        # Case 3: Content wrapped in code fences
+        if stripped.startswith('```markdown') or stripped.startswith('```md'):
+            stripped = stripped.split('\n', 1)[1] if '\n' in stripped else stripped
+            if stripped.endswith('```'):
+                stripped = stripped[:-3].rstrip()
+            return stripped
+
+        return content
+
+    # ------------------------------------------------------------------
+    # Validation and Auto-Repair
+    # ------------------------------------------------------------------
+    def _validate_and_repair_all(self, output: dict, task_desc: str, extra_ctx: str) -> dict:
+        """Validate every file and auto-repair failures."""
         files = output.get('files', [])
         if not files:
             return output
 
-        broken_files = []
-        for f in files:
-            path = f.get('path', '')
-            content = f.get('content', '')
-            issues = []
+        for attempt in range(MAX_REPAIR_ATTEMPTS):
+            broken = []
+            for f in files:
+                path = f.get('path', '')
+                content = f.get('content', '')
+                if not path or not content:
+                    continue
 
-            if not content or len(content.strip()) < 10:
-                issues.append('empty or too short')
-            elif _detect_truncation(content, path):
-                issues.append('truncated')
-            elif _has_placeholders(content):
-                issues.append('has placeholders')
+                report = validate_file(content, path)
+                if not report.passed:
+                    broken.append((f, report))
 
-            # Python-specific syntax check
-            if path.endswith('.py') and content and len(content.strip()) > 10:
-                err = _validate_python_syntax(content)
-                if err:
-                    issues.append(f'syntax error: {err}')
+            if not broken:
+                self.emit('action', f'All {len(files)} files validated (attempt {attempt+1})')
+                return output
 
-            if issues:
-                broken_files.append((f, issues))
+            self.emit('action', f'Attempt {attempt+1}: {len(broken)} file(s) failed validation')
 
-        if not broken_files:
-            self.emit('action', f'All {len(files)} files validated successfully')
-            return output
-
-        self.emit('action', f'{len(broken_files)} file(s) need repair: {", ".join(f[0]["path"] for f in broken_files)}')
-
-        # Attempt to repair each broken file
-        for attempt in range(self.MAX_REPAIR_ATTEMPTS):
-            if not broken_files:
-                break
-
-            still_broken = []
-            for f, issues in broken_files:
+            for f, report in broken:
                 path = f['path']
-                self.emit('action', f'Repairing {path} (attempt {attempt+1}): {", ".join(issues)}')
+                failures = report.failures
+                fail_msgs = '; '.join(fr.message for fr in failures[:3])
+                self.emit('action', f'Repairing {path}: {fail_msgs}')
 
-                repair_prompt = (
-                    f"Generate the COMPLETE file for '{path}'. "
-                    f"Issues with previous version: {', '.join(issues)}. "
-                    f"Context: {task_description[:200]}. "
-                    f"Output ONLY the file content as valid JSON: "
-                    f'{{"path": "{path}", "content": "COMPLETE FILE CONTENT HERE"}}'
-                )
+                # Only repair if auto-fixable
+                if not any(fr.auto_fixable for fr in failures):
+                    continue
 
-                try:
-                    repair_messages = self.build_messages(repair_prompt, '')
-                    repair_result = self.call_groq(repair_messages, stream=False)
-                    self.log_token_usage(repair_result['tokens_input'], repair_result['tokens_output'], repair_result['key_used'])
-
-                    new_content = self._extract_file_content(repair_result['content'], path)
-
-                    if new_content and len(new_content.strip()) > len(f.get('content', '').strip()):
-                        # Validate the repair
-                        new_issues = []
-                        if _detect_truncation(new_content, path):
-                            new_issues.append('still truncated')
-                        if path.endswith('.py'):
-                            err = _validate_python_syntax(new_content)
-                            if err:
-                                new_issues.append(f'syntax: {err}')
-
-                        if not new_issues:
-                            f['content'] = new_content
-                            self.emit('action', f'Repaired {path} successfully')
+                new_content = self._repair_file(f, failures, task_desc)
+                if new_content:
+                    new_report = validate_file(new_content, path)
+                    if new_report.passed or len(new_report.failures) < len(report.failures):
+                        f['content'] = new_content
+                        if new_report.passed:
+                            self.emit('fix', f'Repaired {path} successfully')
                         else:
-                            # Repair is better (longer) even if not perfect
-                            f['content'] = new_content
-                            still_broken.append((f, new_issues))
-                    else:
-                        still_broken.append((f, issues))
-                except Exception as e:
-                    logger.warning(f"Repair failed for {path}: {e}")
-                    still_broken.append((f, issues))
+                            self.emit('action', f'Partially repaired {path} ({len(new_report.failures)} issues remain)')
 
-            broken_files = still_broken
+        # Final check
+        still_broken = []
+        for f in files:
+            report = validate_file(f.get('content', ''), f.get('path', ''))
+            if not report.passed:
+                still_broken.append(f['path'])
 
-        if broken_files:
-            names = ', '.join(f[0]['path'] for f in broken_files)
-            self.emit('action', f'Warning: {len(broken_files)} file(s) may still have issues: {names}')
+        if still_broken:
+            self.emit('action', f'Warning: {len(still_broken)} file(s) still have issues after {MAX_REPAIR_ATTEMPTS} attempts')
 
         return output
 
-    def _extract_file_content(self, raw: str, path: str) -> str:
-        """Extract file content from LLM repair output."""
-        # Try JSON parse first
+    def _repair_file(self, file_info: dict, failures: list, task_desc: str) -> str | None:
+        """Re-invoke LLM to repair a single broken file."""
+        path = file_info['path']
+        content = file_info.get('content', '')
+        fail_msgs = '\n'.join(f'- {f.validator}: {f.message}' for f in failures)
+
+        repair_prompt = f"""Fix this file: '{path}'
+
+VALIDATION ERRORS:
+{fail_msgs}
+
+CURRENT (BROKEN) CONTENT:
+{content[:2000]}
+
+INSTRUCTIONS:
+1. Generate the COMPLETE fixed version of this file.
+2. Fix ALL validation errors listed above.
+3. The file must be syntactically valid and complete.
+4. For README.md: output raw markdown, NOT JSON.
+5. Output ONLY the file content — no JSON wrapper, no explanation.
+6. Original task context: {task_desc[:200]}"""
+
         try:
-            if '```json' in raw:
-                raw = raw.split('```json')[1].split('```')[0]
-            elif '```' in raw:
-                parts = raw.split('```')
-                for part in parts[1:]:
-                    if '{' in part:
-                        raw = part.split('```')[0] if '```' in part else part
-                        break
+            messages = [
+                {'role': 'system', 'content': 'You are a code repair agent. Output ONLY the fixed file content. No JSON wrapper. No explanation. Just the corrected code/text.'},
+                {'role': 'user', 'content': repair_prompt[:2000]},
+            ]
+            result = self.call_groq(messages, stream=False)
+            self.log_token_usage(result['tokens_input'], result['tokens_output'], result['key_used'])
 
-            parsed = json.loads(raw.strip())
-            if isinstance(parsed, dict):
-                return parsed.get('content', '')
-            elif isinstance(parsed, list) and parsed:
-                return parsed[0].get('content', '')
-        except (json.JSONDecodeError, IndexError, KeyError):
-            pass
+            repaired = result['content'].strip()
 
-        # Fallback: if it looks like raw code (not JSON), use it directly
-        stripped = raw.strip()
-        if not stripped.startswith('{') and not stripped.startswith('['):
-            # It's probably raw code
-            return stripped
+            # Strip code fences if present
+            if repaired.startswith('```'):
+                lines = repaired.split('\n')
+                repaired = '\n'.join(lines[1:])
+                if repaired.endswith('```'):
+                    repaired = repaired[:-3].rstrip()
 
-        return ''
+            # For non-markdown files, try to extract from JSON if LLM wrapped it
+            if not path.endswith('.md') and repaired.startswith('{'):
+                try:
+                    parsed = json.loads(repaired)
+                    if isinstance(parsed, dict):
+                        if 'content' in parsed:
+                            repaired = parsed['content']
+                        elif 'files' in parsed and parsed['files']:
+                            repaired = parsed['files'][0].get('content', repaired)
+                except json.JSONDecodeError:
+                    pass
+
+            if repaired and len(repaired.strip()) > 10:
+                return repaired
+
+        except Exception as e:
+            logger.warning(f"Repair failed for {path}: {e}")
+
+        return None

@@ -132,6 +132,7 @@ class FileRecord(models.Model):
         ('modified', 'Modified'),
         ('deleted', 'Deleted'),
         ('read', 'Read'),
+        ('validated', 'Validated'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -140,6 +141,7 @@ class FileRecord(models.Model):
     action = models.CharField(max_length=10, choices=ACTION_CHOICES)
     content_hash = models.CharField(max_length=64, blank=True)
     size_bytes = models.IntegerField(default=0)
+    metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

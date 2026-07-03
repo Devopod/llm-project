@@ -141,7 +141,7 @@ CSRF_TRUSTED_ORIGINS = [
 # Groq API Configuration
 GROQ_API_KEY_1 = os.getenv('GROQ_API_KEY_1')
 GROQ_API_KEY_2 = os.getenv('GROQ_API_KEY_2')
-GROQ_MODEL = os.getenv('GROQ_MODEL', 'openai/gpt-oss-120b')
+GROQ_MODEL = os.getenv('GROQ_MODEL', 'meta-llama/llama-4-scout-17b-16e-instruct')
 
 # Ngrok
 NGROK_AUTHTOKEN = os.getenv('NGROK_AUTHTOKEN')

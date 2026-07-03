@@ -118,6 +118,18 @@ def deploy_project_task(self, project_id: str):
             )
             return {'status': 'error', 'message': 'No workspace'}
 
+        # Pre-deployment validation
+        from .validators import validate_workspace, validate_runtime
+        pre_report = validate_workspace(workspace)
+        if not pre_report.passed:
+            failed = [r.file_path for r in pre_report.failed_files]
+            logger.warning(f"Pre-deploy validation: {len(failed)} files have issues: {failed[:5]}")
+            Message.objects.create(
+                project=project, role='deployer',
+                content=f"Warning: {len(failed)} file(s) have validation issues: {', '.join(failed[:3])}",
+                message_type='action',
+            )
+
         # Kill any existing deployment for this project
         old_deploy = project.project_state.get('deploy_info', {})
         old_pid = old_deploy.get('pid')
@@ -218,23 +230,51 @@ def deploy_project_task(self, project_id: str):
             stderr = server_process.stderr.read().decode()[:500]
             raise RuntimeError(f"Server failed to start: {stderr}")
 
-        # Health check: verify the server responds
+        # Health check: verify the server responds with actual content
         deploy_verified = False
-        for check_attempt in range(3):
+        ui_verified = False
+        import urllib.request
+        for check_attempt in range(4):
             try:
-                import urllib.request
                 req = urllib.request.Request(f'http://127.0.0.1:{port}/')
                 req.add_header('User-Agent', 'AstraDev-HealthCheck')
                 resp = urllib.request.urlopen(req, timeout=5)
                 if resp.status < 500:
+                    body = resp.read().decode('utf-8', errors='replace')[:2000]
                     deploy_verified = True
+
+                    # UI Validation: check the response is actual rendered content
+                    bad_indicators = [
+                        'Traceback (most recent call last)',
+                        'Internal Server Error',
+                        'ModuleNotFoundError',
+                        'ImportError',
+                    ]
+                    is_bad = any(ind in body for ind in bad_indicators)
+                    if not is_bad and '<html' in body.lower():
+                        ui_verified = True
+                    elif not is_bad and len(body) > 50:
+                        ui_verified = True
                     break
             except Exception as hc_err:
                 logger.debug(f"Health check attempt {check_attempt+1} failed: {hc_err}")
                 time.sleep(2)
 
+        # Try /health endpoint
+        health_ok = False
+        try:
+            req = urllib.request.Request(f'http://127.0.0.1:{port}/health')
+            req.add_header('User-Agent', 'AstraDev-HealthCheck')
+            resp = urllib.request.urlopen(req, timeout=3)
+            if resp.status < 400:
+                health_ok = True
+        except Exception:
+            pass
+
         if not deploy_verified:
-            logger.warning(f"Health check failed for project {project_id} on port {port}, but server is running")
+            logger.warning(f"Health check failed for project {project_id} on port {port}")
+        if not ui_verified:
+            logger.warning(f"UI validation: response may not be rendering correctly for {project_id}")
 
         # Deploy URL
         deploy_url = f"/projects/{project_id}/deployed/"
@@ -249,19 +289,31 @@ def deploy_project_task(self, project_id: str):
             'deploy_path': deploy_url,
             'start_cmd': start_cmd,
             'health_check': deploy_verified,
+            'ui_verified': ui_verified,
+            'health_endpoint': health_ok,
         })
         project.project_state['deploy_info'] = deploy_info
         project.save(update_fields=['deployment_url', 'status', 'project_state'])
 
-        status_msg = "Deployment successful!" if deploy_verified else "Deployed (health check pending)"
+        if deploy_verified and ui_verified:
+            status_msg = "Deployment successful — app verified!"
+        elif deploy_verified:
+            status_msg = "Deployed — server running but UI not fully verified"
+        else:
+            status_msg = "Deployed (health check pending)"
+
         Message.objects.create(
             project=project, role='deployer',
             content=f"{status_msg} Your app is live at: {deploy_url}",
             message_type='deployment',
-            metadata={'url': deploy_url, 'status': 'live', 'port': port, 'verified': deploy_verified},
+            metadata={
+                'url': deploy_url, 'status': 'live', 'port': port,
+                'verified': deploy_verified, 'ui_verified': ui_verified,
+                'health_endpoint': health_ok,
+            },
         )
-        logger.info(f"Project {project_id} deployed at {deploy_url} (port {port}, verified={deploy_verified})")
-        return {'status': 'deployed', 'url': deploy_url, 'verified': deploy_verified}
+        logger.info(f"Project {project_id} deployed at {deploy_url} (port {port}, verified={deploy_verified}, ui={ui_verified})")
+        return {'status': 'deployed', 'url': deploy_url, 'verified': deploy_verified, 'ui_verified': ui_verified}
 
     except Exception as e:
         logger.error(f"Deploy error: {e}")
