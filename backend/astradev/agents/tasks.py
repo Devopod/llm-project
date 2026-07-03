@@ -30,13 +30,70 @@ def run_agent_pipeline(self, project_id: str, prompt: str):
         raise self.retry(exc=e, countdown=10)
 
 
+def _find_flask_app(workspace):
+    """Recursively find the Flask app file and return (app_file_relative, app_dir)."""
+    import re as _re
+
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in ('node_modules', '.git', '__pycache__', 'venv', '.venv', 'tests', 'test')]
+        for fname in files:
+            if not fname.endswith('.py'):
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                content = open(fpath, 'r', errors='replace').read()
+                # Look for Flask() instantiation or create_app pattern
+                if 'Flask(' in content or 'Flask (' in content:
+                    rel = os.path.relpath(fpath, workspace)
+                    return rel, root
+            except Exception:
+                pass
+    return None, None
+
+
+def _find_main_app_file(workspace):
+    """Find the main entry point for any Python web app."""
+    # Priority 1: top-level app.py or main.py with Flask/FastAPI
+    for name in ['app.py', 'main.py', 'server.py', 'run.py']:
+        fpath = os.path.join(workspace, name)
+        if os.path.isfile(fpath):
+            try:
+                content = open(fpath, 'r', errors='replace').read()
+                if 'Flask' in content or 'FastAPI' in content or 'fastapi' in content:
+                    return name, workspace, content
+            except Exception:
+                pass
+
+    # Priority 2: app/__init__.py with Flask
+    init_path = os.path.join(workspace, 'app', '__init__.py')
+    if os.path.isfile(init_path):
+        try:
+            content = open(init_path, 'r', errors='replace').read()
+            if 'Flask' in content:
+                return 'app/__init__.py', workspace, content
+        except Exception:
+            pass
+
+    # Priority 3: recursive search
+    rel, app_dir = _find_flask_app(workspace)
+    if rel:
+        try:
+            content = open(os.path.join(workspace, rel), 'r', errors='replace').read()
+            return rel, app_dir, content
+        except Exception:
+            pass
+
+    return None, None, None
+
+
 @shared_task(bind=True, max_retries=1)
 def deploy_project_task(self, project_id: str):
-    """Deploy project files via a local server + ngrok tunnel."""
+    """Deploy project files via a local server + Django reverse proxy."""
     import subprocess
     import signal
     import time
     import socket
+    import re
 
     def _find_free_port():
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -61,129 +118,125 @@ def deploy_project_task(self, project_id: str):
             )
             return {'status': 'error', 'message': 'No workspace'}
 
-        # Detect project type and choose server
-        files = os.listdir(workspace)
+        # Kill any existing deployment for this project
+        old_deploy = project.project_state.get('deploy_info', {})
+        old_pid = old_deploy.get('pid')
+        if old_pid:
+            try:
+                os.killpg(os.getpgid(old_pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+
         port = _find_free_port()
-        server_process = None
         start_cmd = None
+        cwd = workspace
 
-        # Check for web-servable content
-        has_index_html = 'index.html' in files
-        has_package_json = 'package.json' in files
-        has_flask = any(
-            'flask' in open(os.path.join(workspace, f)).read().lower()
-            for f in files if f.endswith('.py')
-            and os.path.isfile(os.path.join(workspace, f))
-        )
-        has_fastapi = any(
-            'fastapi' in open(os.path.join(workspace, f)).read().lower()
-            for f in files if f.endswith('.py')
-            and os.path.isfile(os.path.join(workspace, f))
-        )
-        has_django = 'manage.py' in files
+        # Detect project type
+        all_files = []
+        for root, dirs, files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in ('node_modules', '.git', '__pycache__', 'venv', '.venv')]
+            for f in files:
+                all_files.append(os.path.relpath(os.path.join(root, f), workspace))
 
-        # Determine start command
-        if has_index_html:
-            start_cmd = ['python3', '-m', 'http.server', str(port)]
-        elif has_fastapi:
-            # Find the main app file
-            app_file = None
-            for f in files:
-                if f.endswith('.py') and os.path.isfile(os.path.join(workspace, f)):
-                    content = open(os.path.join(workspace, f)).read()
-                    if 'FastAPI' in content or 'fastapi' in content:
-                        app_file = f
-                        break
-            if app_file:
-                module = app_file.replace('.py', '')
-                start_cmd = ['uvicorn', f'{module}:app', '--host', '0.0.0.0', '--port', str(port)]
+        top_files = os.listdir(workspace)
+        has_index_html = 'index.html' in top_files
+        has_package_json = 'package.json' in top_files
+        has_django = 'manage.py' in top_files
+
+        # Find Flask/FastAPI app
+        app_rel, app_dir, app_content = _find_main_app_file(workspace)
+
+        has_flask = app_content and ('Flask' in app_content)
+        has_fastapi = app_content and ('FastAPI' in app_content or 'fastapi' in app_content)
+
+        if has_flask and app_rel:
+            # Install dependencies
+            req_file = os.path.join(workspace, 'requirements.txt')
+            if os.path.isfile(req_file):
+                subprocess.run(['pip3', 'install', '-r', req_file],
+                               cwd=workspace, capture_output=True, timeout=60)
             else:
-                start_cmd = ['python3', '-m', 'http.server', str(port)]
-        elif has_flask:
-            app_file = None
-            for f in files:
-                if f.endswith('.py') and os.path.isfile(os.path.join(workspace, f)):
-                    content = open(os.path.join(workspace, f)).read()
-                    if 'Flask' in content:
-                        app_file = f
-                        break
-            if app_file:
-                # Install Flask if needed
-                req_file = os.path.join(workspace, 'requirements.txt')
-                if os.path.isfile(req_file):
-                    subprocess.run(['pip3', 'install', '-r', req_file],
-                                   cwd=workspace, capture_output=True, timeout=60)
-                else:
-                    subprocess.run(['pip3', 'install', 'flask'],
-                                   capture_output=True, timeout=30)
-                # Patch app.run() to use dynamic port
-                app_content = open(os.path.join(workspace, app_file)).read()
-                import re
-                patched = re.sub(
-                    r"app\.run\([^)]*\)",
-                    f"app.run(host='0.0.0.0', port={port}, debug=False)",
-                    app_content
-                )
-                if patched != app_content:
-                    with open(os.path.join(workspace, app_file), 'w') as pf:
-                        pf.write(patched)
-                start_cmd = ['python3', app_file]
+                subprocess.run(['pip3', 'install', 'flask', 'pyyaml'],
+                               capture_output=True, timeout=30)
+
+            # Create a launcher script that handles app discovery
+            launcher_content = _create_flask_launcher(workspace, app_rel, port)
+            launcher_path = os.path.join(workspace, '_astradev_launcher.py')
+            with open(launcher_path, 'w') as lf:
+                lf.write(launcher_content)
+            start_cmd = ['python3', '_astradev_launcher.py']
+
+        elif has_fastapi and app_rel:
+            req_file = os.path.join(workspace, 'requirements.txt')
+            if os.path.isfile(req_file):
+                subprocess.run(['pip3', 'install', '-r', req_file],
+                               cwd=workspace, capture_output=True, timeout=60)
             else:
-                start_cmd = ['python3', '-m', 'http.server', str(port)]
+                subprocess.run(['pip3', 'install', 'fastapi', 'uvicorn'],
+                               capture_output=True, timeout=30)
+            module = app_rel.replace('.py', '').replace('/', '.')
+            start_cmd = ['uvicorn', f'{module}:app', '--host', '0.0.0.0', '--port', str(port)]
+
         elif has_django:
             start_cmd = ['python3', 'manage.py', 'runserver', f'0.0.0.0:{port}']
-        elif has_package_json:
-            # Install deps and start node app
-            subprocess.run(['npm', 'install'], cwd=workspace, capture_output=True, timeout=60)
-            start_cmd = ['npx', 'serve', '-l', str(port), '-s', '.']
-        else:
-            # Default: create a simple index.html from project files and serve
-            index_path = os.path.join(workspace, 'index.html')
-            if not os.path.exists(index_path):
-                # Generate simple HTML showcase
-                file_list = '\n'.join(f'<li>{f}</li>' for f in files)
-                html = f"""<!DOCTYPE html>
-<html>
-<head><title>{project.name} - Deployed by AstraDev</title>
-<style>body{{font-family:system-ui;max-width:800px;margin:50px auto;padding:20px;background:#0d1117;color:#c9d1d9}}
-h1{{color:#58a6ff}}pre{{background:#161b22;padding:15px;border-radius:8px;overflow-x:auto}}
-a{{color:#58a6ff}}li{{margin:5px 0}}</style></head>
-<body>
-<h1>{project.name}</h1>
-<p>Deployed via AstraDev</p>
-<h2>Project Files</h2>
-<ul>{file_list}</ul>
-<h2>Source Code</h2>
-"""
-                # Include first few source files
-                for f in files[:5]:
-                    fpath = os.path.join(workspace, f)
-                    if os.path.isfile(fpath) and not f.startswith('.'):
-                        try:
-                            code = open(fpath).read()[:3000]
-                            html += f'<h3>{f}</h3><pre><code>{code}</code></pre>\n'
-                        except Exception:
-                            pass
-                html += "</body></html>"
-                with open(index_path, 'w') as fh:
-                    fh.write(html)
+
+        elif has_index_html:
             start_cmd = ['python3', '-m', 'http.server', str(port)]
 
+        elif has_package_json:
+            subprocess.run(['npm', 'install'], cwd=workspace, capture_output=True, timeout=60)
+            start_cmd = ['npx', 'serve', '-l', str(port), '-s', '.']
+
+        else:
+            # Check for any .html files in subdirs
+            html_files = [f for f in all_files if f.endswith('.html')]
+            if html_files:
+                # Find the directory with index.html
+                for hf in html_files:
+                    if os.path.basename(hf) == 'index.html':
+                        cwd = os.path.dirname(os.path.join(workspace, hf)) or workspace
+                        start_cmd = ['python3', '-m', 'http.server', str(port)]
+                        break
+                if not start_cmd:
+                    start_cmd = ['python3', '-m', 'http.server', str(port)]
+            else:
+                # Generate an index page as last resort
+                _generate_fallback_index(workspace, project.name, all_files)
+                start_cmd = ['python3', '-m', 'http.server', str(port)]
+
         # Start the server process
-        logger.info(f"Starting server for project {project_id}: {start_cmd}")
+        logger.info(f"Starting server for project {project_id}: {start_cmd} in {cwd}")
         server_process = subprocess.Popen(
-            start_cmd, cwd=workspace,
+            start_cmd, cwd=cwd,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             preexec_fn=os.setsid,
         )
 
-        # Wait for server to start
-        time.sleep(2)
+        # Wait and verify server started
+        time.sleep(3)
         if server_process.poll() is not None:
             stderr = server_process.stderr.read().decode()[:500]
             raise RuntimeError(f"Server failed to start: {stderr}")
 
-        # Deploy URL is a path on the same base URL (proxied by Django)
+        # Health check: verify the server responds
+        deploy_verified = False
+        for check_attempt in range(3):
+            try:
+                import urllib.request
+                req = urllib.request.Request(f'http://127.0.0.1:{port}/')
+                req.add_header('User-Agent', 'AstraDev-HealthCheck')
+                resp = urllib.request.urlopen(req, timeout=5)
+                if resp.status < 500:
+                    deploy_verified = True
+                    break
+            except Exception as hc_err:
+                logger.debug(f"Health check attempt {check_attempt+1} failed: {hc_err}")
+                time.sleep(2)
+
+        if not deploy_verified:
+            logger.warning(f"Health check failed for project {project_id} on port {port}, but server is running")
+
+        # Deploy URL
         deploy_url = f"/projects/{project_id}/deployed/"
 
         # Save deployment info
@@ -195,18 +248,20 @@ a{{color:#58a6ff}}li{{margin:5px 0}}</style></head>
             'pid': server_process.pid,
             'deploy_path': deploy_url,
             'start_cmd': start_cmd,
+            'health_check': deploy_verified,
         })
         project.project_state['deploy_info'] = deploy_info
         project.save(update_fields=['deployment_url', 'status', 'project_state'])
 
+        status_msg = "Deployment successful!" if deploy_verified else "Deployed (health check pending)"
         Message.objects.create(
             project=project, role='deployer',
-            content=f"Deployment successful! Your app is live at: {deploy_url}",
+            content=f"{status_msg} Your app is live at: {deploy_url}",
             message_type='deployment',
-            metadata={'url': deploy_url, 'status': 'live', 'port': port},
+            metadata={'url': deploy_url, 'status': 'live', 'port': port, 'verified': deploy_verified},
         )
-        logger.info(f"Project {project_id} deployed at {deploy_url} (port {port})")
-        return {'status': 'deployed', 'url': deploy_url}
+        logger.info(f"Project {project_id} deployed at {deploy_url} (port {port}, verified={deploy_verified})")
+        return {'status': 'deployed', 'url': deploy_url, 'verified': deploy_verified}
 
     except Exception as e:
         logger.error(f"Deploy error: {e}")
@@ -223,3 +278,82 @@ a{{color:#58a6ff}}li{{margin:5px 0}}</style></head>
         except Exception:
             pass
         raise
+
+
+def _create_flask_launcher(workspace, app_rel, port):
+    """Create a launcher script that properly imports and runs the Flask app."""
+    # Determine if the app is in a package or a standalone file
+    app_dir = os.path.dirname(app_rel)
+    app_file = os.path.basename(app_rel)
+    module_name = app_file.replace('.py', '')
+
+    if app_dir:
+        # App is inside a package (e.g., app/__init__.py)
+        package_name = app_dir.replace('/', '.')
+        if module_name == '__init__':
+            import_line = f"from {package_name} import app"
+            fallback = f"from {package_name} import create_app; app = create_app()"
+        else:
+            import_line = f"from {package_name}.{module_name} import app"
+            fallback = f"import {package_name}.{module_name} as mod; app = getattr(mod, 'app', None) or getattr(mod, 'create_app', lambda: None)()"
+    else:
+        # Top-level file
+        import_line = f"from {module_name} import app"
+        fallback = f"import {module_name} as mod; app = getattr(mod, 'app', None) or getattr(mod, 'create_app', lambda: None)()"
+
+    # Also register template and static folders
+    return f'''import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+app = None
+try:
+    {import_line}
+except ImportError:
+    try:
+        {fallback}
+    except Exception as e2:
+        print(f"Could not import app: {{e2}}")
+        sys.exit(1)
+
+if app is None:
+    print("Could not find Flask app instance")
+    sys.exit(1)
+
+# Register template folder if exists
+import os.path
+for tmpl_dir in ['templates', 'chatbot/templates', 'app/templates']:
+    full = os.path.join(os.path.dirname(os.path.abspath(__file__)), tmpl_dir)
+    if os.path.isdir(full):
+        app.template_folder = full
+        break
+
+# Register static folder if exists
+for static_dir in ['static', 'chatbot/static', 'app/static']:
+    full = os.path.join(os.path.dirname(os.path.abspath(__file__)), static_dir)
+    if os.path.isdir(full):
+        app.static_folder = full
+        break
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port={port}, debug=False)
+'''
+
+
+def _generate_fallback_index(workspace, project_name, all_files):
+    """Generate a fallback index.html that lists project files."""
+    file_list = '\n'.join(f'<li>{f}</li>' for f in sorted(all_files) if not f.startswith('.'))
+    html = f"""<!DOCTYPE html>
+<html>
+<head><title>{project_name} - Deployed by AstraDev</title>
+<style>body{{font-family:system-ui;max-width:800px;margin:50px auto;padding:20px;background:#0d1117;color:#c9d1d9}}
+h1{{color:#58a6ff}}pre{{background:#161b22;padding:15px;border-radius:8px;overflow-x:auto}}
+a{{color:#58a6ff}}li{{margin:5px 0}}</style></head>
+<body>
+<h1>{project_name}</h1>
+<p>Deployed via AstraDev</p>
+<h2>Project Files</h2>
+<ul>{file_list}</ul>
+</body></html>"""
+    with open(os.path.join(workspace, 'index.html'), 'w') as fh:
+        fh.write(html)

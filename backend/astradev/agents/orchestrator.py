@@ -184,9 +184,15 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
 
         if task_type == 'write_code':
             result = self.writer.execute(description, context)
-            # Write files to workspace
+            # Write files to workspace (writer.edit_file already writes,
+            # but _write_file also creates FileRecord if not done)
             for file_info in result.get('files', []):
-                self._write_file(file_info['path'], file_info.get('content', ''))
+                path = file_info.get('path', '')
+                content = file_info.get('content', '')
+                if path and content:
+                    self._write_file(path, content)
+            # Post-write validation for Python files
+            self._validate_workspace_python()
             return result
 
         elif task_type == 'read_code':
@@ -296,6 +302,54 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
             'last_updated': datetime.utcnow().isoformat(),
         }
         self.project.save(update_fields=['project_state'])
+
+    def _validate_workspace_python(self):
+        """Run AST parse on all Python files in workspace; log warnings for broken ones."""
+        import ast as ast_mod
+        if not os.path.exists(self.workspace_path):
+            return
+        broken = []
+        for root, dirs, files in os.walk(self.workspace_path):
+            dirs[:] = [d for d in dirs if d not in ('node_modules', '.git', '__pycache__', 'venv')]
+            for fname in files:
+                if not fname.endswith('.py'):
+                    continue
+                fpath = os.path.join(root, fname)
+                rel = os.path.relpath(fpath, self.workspace_path)
+                try:
+                    with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
+                        source = f.read()
+                    if source.strip():
+                        ast_mod.parse(source)
+                except SyntaxError as e:
+                    broken.append((rel, f"Line {e.lineno}: {e.msg}"))
+                except Exception:
+                    pass
+
+        if broken:
+            for rel, err in broken:
+                self.emit('action', f'Syntax issue in {rel}: {err}')
+                # Attempt auto-repair via writer
+                try:
+                    with open(os.path.join(self.workspace_path, rel), 'r') as f:
+                        bad_content = f.read()
+                    repair_result = self.writer.execute(
+                        f"Fix the syntax error in '{rel}'. Error: {err}. "
+                        f"Rewrite the COMPLETE corrected file. Current content:\n{bad_content[:1500]}",
+                        {}
+                    )
+                    for fi in repair_result.get('files', []):
+                        if fi.get('path') == rel or not fi.get('path'):
+                            new_content = fi.get('content', '')
+                            if new_content and len(new_content.strip()) > 10:
+                                try:
+                                    ast_mod.parse(new_content)
+                                    self._write_file(rel, new_content)
+                                    self.emit('fix', f'Auto-repaired {rel}')
+                                except SyntaxError:
+                                    self.emit('action', f'Auto-repair for {rel} still has issues')
+                except Exception as repair_err:
+                    logger.warning(f"Auto-repair failed for {rel}: {repair_err}")
 
     def _get_agent_for_type(self, task_type: str) -> str:
         mapping = {
