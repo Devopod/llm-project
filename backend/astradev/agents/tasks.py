@@ -162,11 +162,31 @@ def deploy_project_task(self, project_id: str):
         has_fastapi = app_content and ('FastAPI' in app_content or 'fastapi' in app_content)
 
         if has_flask and app_rel:
-            # Install dependencies
+            # Install dependencies — try requirements.txt first, fall back to core deps
             req_file = os.path.join(workspace, 'requirements.txt')
             if os.path.isfile(req_file):
-                subprocess.run(['pip3', 'install', '-r', req_file],
-                               cwd=workspace, capture_output=True, timeout=60)
+                result = subprocess.run(['pip3', 'install', '-r', req_file],
+                               cwd=workspace, capture_output=True, timeout=120)
+                if result.returncode != 0:
+                    logger.warning(f"requirements.txt install failed, installing core deps: {result.stderr.decode()[:200]}")
+                    Message.objects.create(
+                        project=project, role='deployer',
+                        content="Some dependencies failed to install. Falling back to core Flask dependencies.",
+                        message_type='action',
+                    )
+                    # Try installing each requirement individually, skip failures
+                    try:
+                        with open(req_file) as rf:
+                            for line in rf:
+                                pkg = line.strip()
+                                if pkg and not pkg.startswith('#'):
+                                    subprocess.run(['pip3', 'install', pkg],
+                                                   capture_output=True, timeout=30)
+                    except Exception:
+                        pass
+                    # Ensure Flask is always installed
+                    subprocess.run(['pip3', 'install', 'flask', 'pyyaml'],
+                                   capture_output=True, timeout=30)
             else:
                 subprocess.run(['pip3', 'install', 'flask', 'pyyaml'],
                                capture_output=True, timeout=30)
@@ -359,16 +379,38 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 app = None
+import_error = None
 try:
     {import_line}
-except ImportError:
+except Exception as e1:
     try:
         {fallback}
     except Exception as e2:
-        print(f"Could not import app: {{e2}}")
-        sys.exit(1)
+        import_error = str(e2)
 
-if app is None:
+if app is None and import_error:
+    # Create a minimal Flask app that shows the error
+    try:
+        from flask import Flask
+        app = Flask(__name__)
+        err_msg = import_error
+
+        @app.route("/")
+        def error_page():
+            return f"""<html><body style="font-family:system-ui;max-width:800px;margin:50px auto;padding:20px;background:#0d1117;color:#c9d1d9">
+<h1 style="color:#f85149">Import Error</h1>
+<p>The app failed to start due to a missing dependency:</p>
+<pre style="background:#161b22;padding:15px;border-radius:8px;color:#ff7b72">{{err_msg}}</pre>
+<p style="color:#8b949e">Fix the imports or requirements.txt and redeploy.</p>
+</body></html>""", 500
+
+        @app.route("/health")
+        def health():
+            return {{"status": "error", "message": err_msg}}, 500
+    except Exception:
+        print(f"Could not import app: {{import_error}}")
+        sys.exit(1)
+elif app is None:
     print("Could not find Flask app instance")
     sys.exit(1)
 

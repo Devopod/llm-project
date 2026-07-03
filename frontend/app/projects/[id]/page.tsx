@@ -43,6 +43,8 @@ export default function ProjectPage() {
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const [terminalOutput, setTerminalOutput] = useState("");
   const [terminalInput, setTerminalInput] = useState("");
+  const [deployPromptShown, setDeployPromptShown] = useState(false);
+  const [deployTriggered, setDeployTriggered] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<ProjectWebSocket | null>(null);
 
@@ -59,6 +61,14 @@ export default function ProjectPage() {
         timestamp: m.created_at as string,
       }));
       setMessages(msgs);
+      // Check if there's an existing deploy_prompt in history
+      if (msgs.some((m: Message) => m.type === "deploy_prompt")) {
+        setDeployPromptShown(true);
+      }
+      // Check if deployment was already triggered
+      if (msgs.some((m: Message) => m.type === "deployment")) {
+        setDeployTriggered(true);
+      }
     }).catch(() => {});
     projectsApi.roadmap(id).then((res) => setTasks(res.data.tasks || [])).catch(() => {});
     loadFiles();
@@ -74,6 +84,9 @@ export default function ProjectPage() {
       }
       if (msg.type === "deployment") {
         projectsApi.get(id).then((res) => setProject(res.data)).catch(() => {});
+      }
+      if (msg.type === "deploy_prompt") {
+        setDeployPromptShown(true);
       }
     });
 
@@ -219,7 +232,7 @@ export default function ProjectPage() {
     const icons: Record<string, string> = {
       thinking: "...", plan: "P", action: "A", code: "</>",
       output: ">", error: "!", fix: "F", success: "OK",
-      deployment: "D", message: "M",
+      deployment: "D", message: "M", deploy_prompt: "🚀",
     };
     return icons[type] || "?";
   };
@@ -231,6 +244,7 @@ export default function ProjectPage() {
       output: "border-gray-600", error: "border-red-600",
       fix: "border-orange-600", success: "border-green-500",
       deployment: "border-purple-600", message: "border-gray-700",
+      deploy_prompt: "border-purple-500",
     };
     return colors[type] || "border-gray-700";
   };
@@ -340,6 +354,29 @@ export default function ProjectPage() {
                       <pre className="bg-gray-900 border border-gray-700 rounded-md p-3 overflow-x-auto">
                         <code className="text-xs text-green-300 font-mono whitespace-pre-wrap">{msg.content}</code>
                       </pre>
+                    ) : msg.type === "deploy_prompt" ? (
+                      <div className="text-sm">
+                        <p className="text-gray-300 mb-3">{msg.content}</p>
+                        {!deployTriggered ? (
+                          <div className="flex gap-3">
+                            <button
+                              onClick={() => {
+                                setDeployTriggered(true);
+                                handleDeploy('approve');
+                              }}
+                              className="px-4 py-2 bg-green-700 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition">
+                              Approve & Deploy
+                            </button>
+                            <button
+                              onClick={() => setDeployTriggered(true)}
+                              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm font-medium transition">
+                              Skip Deployment
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-500">Deployment initiated...</span>
+                        )}
+                      </div>
                     ) : msg.type === "deployment" ? (
                       <div className="text-sm text-gray-300 whitespace-pre-wrap">
                         {msg.content.split(/(https?:\/\/[^\s]+)/g).map((part: string, idx: number) =>

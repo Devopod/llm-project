@@ -189,6 +189,9 @@ Analyze user requests, create plans, delegate to sub-agents, and ensure quality 
                 self.emit('action', 'Project completed with warnings — some validations had issues')
             self.project.save()
 
+            # Phase 8: Auto-deploy prompt
+            self.emit('deploy_prompt', 'Project is ready for deployment. Would you like to deploy this app to a public URL?')
+
             return {'status': 'completed', 'project_state': self.project.project_state}
 
         except Exception as e:
