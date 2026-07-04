@@ -85,42 +85,28 @@ IMPORTANT — Working with EXISTING projects:
             'tasks': [
                 {
                     'id': 'task_1',
-                    'title': 'Set up project structure',
-                    'description': f'Create the initial project structure for: {prompt}',
+                    'title': 'Build complete application',
+                    'description': (
+                        f'Build a COMPLETE, production-ready application for: {prompt}. '
+                        f'Generate ALL files needed: main application file (app.py), '
+                        f'HTML templates with full styling and interactivity, '
+                        f'requirements.txt, configuration files, and any helper modules. '
+                        f'The app must be immediately runnable with all routes, '
+                        f'error handling, and a polished UI. '
+                        f'Put files in the project root (not in a subdirectory). '
+                        f'For Flask apps: include templates/ folder with HTML files, '
+                        f'use relative fetch URLs, and include proper CSS styling.'
+                    ),
                     'type': 'write_code',
                     'dependencies': [],
-                    'estimated_complexity': 'medium',
-                },
-                {
-                    'id': 'task_2',
-                    'title': 'Implement core functionality',
-                    'description': f'Implement the main features requested: {prompt}',
-                    'type': 'write_code',
-                    'dependencies': ['task_1'],
                     'estimated_complexity': 'high',
                 },
                 {
-                    'id': 'task_3',
-                    'title': 'Add configuration and dependencies',
-                    'description': 'Add package manifests, config files, and dependency declarations',
-                    'type': 'write_code',
-                    'dependencies': ['task_2'],
-                    'estimated_complexity': 'low',
-                },
-                {
-                    'id': 'task_4',
-                    'title': 'Write tests',
-                    'description': 'Write unit and integration tests for the implemented code',
-                    'type': 'test',
-                    'dependencies': ['task_3'],
-                    'estimated_complexity': 'medium',
-                },
-                {
-                    'id': 'task_5',
+                    'id': 'task_2',
                     'title': 'Generate documentation',
-                    'description': 'Create README and API documentation',
+                    'description': f'Create a comprehensive README.md for: {prompt}',
                     'type': 'document',
-                    'dependencies': ['task_4'],
+                    'dependencies': ['task_1'],
                     'estimated_complexity': 'low',
                 },
             ]

@@ -1,5 +1,5 @@
 """
-AstraDev Code Writer Agent — Self-Healing Code Generation
+AstraDev Code Writer Agent -- Self-Healing Code Generation
 
 Flow:
   1. Generate files via Groq LLM
@@ -31,7 +31,7 @@ You write clean, production-quality code in any language/framework.
 
 When asked to create or modify files, output COMPLETE file content as a JSON response.
 
-Output format (MUST be valid JSON — no markdown fences):
+Output format (MUST be valid JSON -- no markdown fences):
 {
   "files": [
     {"action": "create", "path": "relative/path.ext", "content": "COMPLETE FILE"},
@@ -43,33 +43,33 @@ Output format (MUST be valid JSON — no markdown fences):
 
 Actions:
 - "create": Create a new file (will overwrite if exists)
-- "edit": Modify an existing file — you MUST preserve ALL existing code and ONLY add/change what was requested. Output the COMPLETE file with changes merged in.
+- "edit": Modify an existing file -- you MUST preserve ALL existing code and ONLY add/change what was requested. Output the COMPLETE file with changes merged in.
 - "delete": Delete an existing file (no content needed)
 
 CRITICAL EDITING RULES (for "edit" action):
 - When editing an existing file, you will receive the FULL CURRENT CONTENT in the context.
-- You MUST include ALL original functions, classes, routes, imports — everything that was there before.
+- You MUST include ALL original functions, classes, routes, imports -- everything that was there before.
 - ONLY add, modify, or remove what the user specifically asked for.
-- NEVER replace the entire file with just the new code — merge the new code INTO the existing file.
+- NEVER replace the entire file with just the new code -- merge the new code INTO the existing file.
 - If asked to "add a /health endpoint", keep ALL existing routes and ADD the new one.
 - If asked to "change function X", keep ALL other functions unchanged.
 
 ABSOLUTE RULES:
-1. EVERY file MUST be COMPLETE — line 1 to last line. NEVER truncate.
+1. EVERY file MUST be COMPLETE -- line 1 to last line. NEVER truncate.
 2. NEVER use: '...', '# TODO', 'pass' (as stub), '// rest of code', 'raise NotImplementedError'.
 3. Every file MUST be syntactically valid and immediately runnable.
 4. Include ALL imports, ALL functions, ALL error handling.
-5. Output ONLY valid JSON — no markdown, no code fences, no explanatory text before/after.
+5. Output ONLY valid JSON -- no markdown, no code fences, no explanatory text before/after.
 6. Use RELATIVE fetch URLs for web apps (e.g., 'chat' not '/chat').
 7. For Flask: put app creation in a top-level app.py. Use proper template_folder paths.
 8. For HTML: include COMPLETE styling, all elements, all event handlers, closing tags.
-9. README.md content must be raw markdown — NOT wrapped in JSON.
+9. README.md content must be raw markdown -- NOT wrapped in JSON.
 10. Keep files focused. Split large apps into multiple files.
 11. Every Python file must have valid syntax that passes ast.parse().
 12. Every HTML file must have matching opening/closing tags.
 13. Every JSON file must be valid JSON.
 14. Every YAML file must be valid YAML.
-15. When editing existing files, do NOT create unnecessary new files — only touch what's needed."
+15. When editing existing files, do NOT create unnecessary new files -- only touch what's needed."""
 
     def execute(self, task_description: str, context: dict = None) -> dict:
         self.emit('action', f'Writing code: {task_description[:100]}...')
@@ -349,7 +349,7 @@ INSTRUCTIONS:
 2. Fix ALL validation errors listed above.
 3. The file must be syntactically valid and complete.
 4. For README.md: output raw markdown, NOT JSON.
-5. Output ONLY the file content — no JSON wrapper, no explanation.
+5. Output ONLY the file content -- no JSON wrapper, no explanation.
 6. Original task context: {task_desc[:200]}"""
 
         try:
