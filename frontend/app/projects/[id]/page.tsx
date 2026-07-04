@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { projects as projectsApi, workspaces } from "@/lib/api";
+import { projects as projectsApi, workspaces, apk as apkApi } from "@/lib/api";
 import { ProjectWebSocket } from "@/lib/websocket";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -53,6 +53,8 @@ export default function ProjectPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [showFileTree, setShowFileTree] = useState(true);
   const [chatAttachments, setChatAttachments] = useState<File[]>([]);
+  const [apkBuilding, setApkBuilding] = useState(false);
+  const [apkReady, setApkReady] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<ProjectWebSocket | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -231,12 +233,51 @@ export default function ProjectPage() {
   };
 
   const handleBuildApk = async () => {
-    const apkPrompt = "Build an Android APK from this project. Create the necessary Android project structure with Kotlin, build.gradle, AndroidManifest.xml, and compile it into a downloadable APK file.";
-    setMessages((prev) => [...prev, { type: "message", content: apkPrompt, agent: "user", timestamp: new Date().toISOString() }]);
+    setApkBuilding(true);
+    setApkReady(false);
+    setMessages((prev) => [...prev, { type: "message", content: "Building Android APK (Java)...", agent: "user", timestamp: new Date().toISOString() }]);
     try {
-      await projectsApi.chat(id, apkPrompt);
+      const res = await apkApi.build(id, `Build an Android APK for: ${(project as Record<string, string>)?.name || "this project"}`);
+      if (res.data.status === "success") {
+        setApkReady(true);
+        setMessages((prev) => [...prev, { type: "success", content: "APK built successfully! Click 'Download APK' to get the file.", agent: "deployer", timestamp: new Date().toISOString() }]);
+      } else {
+        setMessages((prev) => [...prev, { type: "action", content: res.data.message || "APK build completed. Download as ZIP to build locally.", agent: "deployer", timestamp: new Date().toISOString() }]);
+      }
     } catch (e) {
       console.error(e);
+      setMessages((prev) => [...prev, { type: "error", content: "APK build failed. Check the activity log for details.", agent: "deployer", timestamp: new Date().toISOString() }]);
+    } finally {
+      setApkBuilding(false);
+    }
+  };
+
+  const handleDownloadApk = async () => {
+    try {
+      const res = await apkApi.download(id);
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      const name = (project as Record<string, string>)?.name || "app";
+      link.setAttribute("download", `${name}.apk`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      // If no APK, try downloading ZIP instead
+      try {
+        const res = await apkApi.download(id);
+        const url = window.URL.createObjectURL(new Blob([res.data]));
+        const link = document.createElement("a");
+        link.href = url;
+        link.setAttribute("download", `${(project as Record<string, string>)?.name || "project"}-android.zip`);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      } catch (e2) {
+        console.error(e2);
+      }
     }
   };
 
@@ -398,12 +439,21 @@ export default function ProjectPage() {
             </svg>
             Deploy
           </button>
-          <button onClick={handleBuildApk} className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-green-700 hover:bg-green-600 rounded-lg transition font-medium">
+          <button onClick={handleBuildApk} disabled={apkBuilding}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-green-700 hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition font-medium">
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
             </svg>
-            APK
+            {apkBuilding ? "Building..." : "Build APK"}
           </button>
+          {apkReady && (
+            <button onClick={handleDownloadApk} className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 rounded-lg transition font-medium animate-pulse">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Download APK
+            </button>
+          )}
           <button onClick={handleDownload} className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg transition font-medium">
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />

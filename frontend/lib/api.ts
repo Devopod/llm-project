@@ -101,6 +101,13 @@ export const projects = {
   },
 };
 
+export const apk = {
+  build: (projectId: string, description?: string) =>
+    api.post(`/projects/${projectId}/apk/build/`, { description }, { timeout: 600000 }),
+  download: (projectId: string) =>
+    api.get(`/projects/${projectId}/apk/download/`, { responseType: 'blob' }),
+};
+
 export const workspaces = {
   files: (projectId: string) => api.get(`/workspaces/${projectId}/files/`),
   fileContent: (projectId: string, path: string) =>

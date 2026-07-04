@@ -13,7 +13,7 @@ export default function DashboardPage() {
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
-  const [buildApk, setBuildApk] = useState(false);
+  const [selectedStack, setSelectedStack] = useState("");
   const [error, setError] = useState("");
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadName, setUploadName] = useState("");
@@ -27,13 +27,27 @@ export default function DashboardPage() {
     projectsApi.list().then((res) => setProjects(res.data)).catch(() => {});
   }, [router, setProjects]);
 
+  const stacks = [
+    { id: 'flask', label: 'Flask', icon: '🐍', desc: 'Python web framework' },
+    { id: 'django', label: 'Django', icon: '🎸', desc: 'Python full-stack framework' },
+    { id: 'fastapi', label: 'FastAPI', icon: '⚡', desc: 'Python async API framework' },
+    { id: 'react', label: 'React', icon: '⚛️', desc: 'JavaScript UI library' },
+    { id: 'nextjs', label: 'Next.js', icon: '▲', desc: 'React full-stack framework' },
+    { id: 'express', label: 'Express', icon: '🟢', desc: 'Node.js web framework' },
+    { id: 'html', label: 'HTML/CSS/JS', icon: '🌐', desc: 'Static web app' },
+    { id: 'android', label: 'Android (Java)', icon: '📱', desc: 'Android APK app' },
+    { id: 'python', label: 'Python Script', icon: '🐍', desc: 'Pure Python project' },
+  ];
+
   const handleCreate = async () => {
     if (!name.trim()) return;
+    if (!selectedStack) { setError('Please select a technology stack'); return; }
     setLoading(true);
     setError("");
-    let finalPrompt = prompt;
-    if (buildApk) {
-      finalPrompt += "\n\n[BUILD_APK] Generate an Android APK for this project. Create a complete Android app with Kotlin/Jetpack Compose, include build.gradle files, and compile into a downloadable APK.";
+    const stackLabel = stacks.find(s => s.id === selectedStack)?.label || selectedStack;
+    let finalPrompt = `[STACK: ${selectedStack}] Build with ${stackLabel}. ${prompt}`;
+    if (selectedStack === 'android') {
+      finalPrompt += "\n\n[BUILD_APK] Generate an Android APK for this project. Create a complete Android app with Java and XML layouts, include build.gradle files, and compile into a downloadable APK.";
     }
     try {
       const res = await projectsApi.create({ name, prompt: finalPrompt });
@@ -178,14 +192,31 @@ export default function DashboardPage() {
               <input type="text" placeholder="Project name" value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-indigo-500" />
-              <textarea placeholder="Describe what you want to build... (e.g., Build a todo app with React and FastAPI)" value={prompt}
-                onChange={(e) => setPrompt(e.target.value)} rows={4}
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">Choose Technology Stack</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {stacks.map((stack) => (
+                    <button key={stack.id} type="button"
+                      onClick={() => setSelectedStack(stack.id)}
+                      className={`p-3 rounded-lg border text-left transition text-sm ${
+                        selectedStack === stack.id
+                          ? 'border-indigo-500 bg-indigo-900/30 text-white'
+                          : 'border-gray-700 bg-gray-800/50 text-gray-300 hover:border-gray-600 hover:bg-gray-800'
+                      }`}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg">{stack.icon}</span>
+                        <div>
+                          <div className="font-medium">{stack.label}</div>
+                          <div className="text-xs text-gray-500">{stack.desc}</div>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <textarea placeholder="Describe what you want to build... (e.g., Build a calculator with a nice UI)" value={prompt}
+                onChange={(e) => setPrompt(e.target.value)} rows={3}
                 className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-indigo-500 resize-none" />
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={buildApk} onChange={(e) => setBuildApk(e.target.checked)}
-                  className="w-4 h-4 rounded border-gray-700 bg-gray-800 text-indigo-600 focus:ring-indigo-500" />
-                <span className="text-sm text-gray-300">Build APK (Android Package)</span>
-              </label>
               <div className="flex gap-3">
                 <button onClick={handleCreate} disabled={loading}
                   className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded-lg transition">
